@@ -63,6 +63,11 @@ Directory** to `server`. Vercel detects the Fastify entrypoint at
 - `OTP_PROVIDER=msg91`, `MSG91_AUTH_KEY`, and `MSG91_TEMPLATE_ID` when enabling
   real OTP delivery; `mock` is for development only
 
+Set the required variables for the **Production** environment, then redeploy.
+`DATABASE_URL`, `JWT_SECRET`, and `JWT_REFRESH_SECRET` are mandatory; the two
+JWT secrets must be different and at least 32 characters each. Do not use the
+example placeholder values from `server\.env.example`.
+
 Apply the database migrations once against the same Neon database before using
 the deployment:
 
@@ -79,6 +84,15 @@ Set-Location app
 flutter run --dart-define=API_BASE_URL=https://your-backend.vercel.app
 flutter build apk --release --dart-define=API_BASE_URL=https://your-backend.vercel.app
 ```
+
+Push the backend deployment changes and redeploy. The app factory is named
+`src/create-app.ts` so Vercel detects `src/index.ts`—not the factory—as the
+Fastify entrypoint. Verify the deployment before building or installing the app
+by opening `https://your-backend.vercel.app/health`. A working backend returns
+HTTP 200 with `{"status":"ok"}`. If it still returns HTTP 500, inspect that
+deployment's **Runtime Logs** and confirm the required environment variables
+are set for its environment. Building an APK in GitHub Actions only compiles
+the Flutter client; it does not deploy or verify the backend.
 
 Chat messages use authenticated HTTP requests and refresh every four seconds
 while a conversation is open, so the app does not depend on an in-memory

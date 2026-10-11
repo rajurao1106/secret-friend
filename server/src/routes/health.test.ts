@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildApp } from '../app.js';
+import { buildApp } from '../create-app.js';
 import type { AppConfig } from '../config/env.js';
 
 const testConfig: AppConfig = {
