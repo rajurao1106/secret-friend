@@ -112,3 +112,30 @@ test('protects discovery with an access token', async () => {
     await app.close();
   }
 });
+
+test('protects REST chat history, message, and read endpoints', async () => {
+  const app = buildApp(testConfig);
+  const conversationId = '19d25512-0e0f-4a67-8df0-13a28c28bd48';
+
+  try {
+    const requests = [
+      { method: 'GET' as const, url: `/conversations/${conversationId}/messages` },
+      {
+        method: 'POST' as const,
+        url: `/conversations/${conversationId}/messages`,
+        payload: { type: 'text', body: 'Hello' },
+      },
+      {
+        method: 'POST' as const,
+        url: `/conversations/${conversationId}/read`,
+        payload: {},
+      },
+    ];
+    for (const request of requests) {
+      const response = await app.inject(request);
+      assert.equal(response.statusCode, 401);
+    }
+  } finally {
+    await app.close();
+  }
+});

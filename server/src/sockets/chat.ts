@@ -2,21 +2,13 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import type { Server, Socket } from 'socket.io';
 import { z } from 'zod';
-import { media } from '../schema/media.js';
 import { messages } from '../schema/messages.js';
 import { userRoomName } from './user-room.js';
 import { areUsersBlocked, getConversationForUser } from '../services/conversation-access.js';
-import { hasReveal } from '../services/reveal-access.js';
-import { containsPersonalInfo } from '../services/anonymity-warning.js';
 import { MessageRateLimiter } from '../services/message-rate-limiter.js';
 import { conversationMutes } from '../schema/conversation-mutes.js';
+import { createChatMessage } from '../services/chat-message.js';
 
-const sendMessageSchema = z.object({
-  conversationId: z.string().uuid(),
-  type: z.enum(['text', 'image', 'file']).default('text'),
-  body: z.string().max(2000).optional(),
-  mediaId: z.string().uuid().optional(),
-});
 const conversationIdSchema = z.object({ conversationId: z.string().uuid() });
 
 function registerSafely(
@@ -68,81 +60,19 @@ export function registerChatSocketHandlers(
     });
 
     registerSafely(app, socket, 'message:send', 'message:error', async (payload) => {
-      const parsed = sendMessageSchema.safeParse(payload);
-      if (!parsed.success) {
-        socket.emit('message:error', { error: 'Invalid message' });
-        return;
-      }
-      const input = parsed.data;
-      if (input.type === 'text' && (input.body === undefined || input.body.length === 0)) {
-        socket.emit('message:error', { error: 'Text message cannot be empty' });
-        return;
-      }
-      if (input.type !== 'text' && input.mediaId === undefined) {
-        socket.emit('message:error', { error: 'Media is required' });
-        return;
-      }
-      if (!messageLimiter.allow(socket.data.userId)) {
-        socket.emit('message:error', { error: 'Message rate limit exceeded' });
-        return;
-      }
-
-      const conversation = await getConversationForUser(
+      const result = await createChatMessage(
         app.db,
-        input.conversationId,
         socket.data.userId,
+        payload,
+        messageLimiter,
       );
-      if (conversation === undefined) {
-        socket.emit('message:error', { error: 'Conversation not found' });
-        return;
-      }
-      const recipientId =
-        conversation.userA === socket.data.userId
-          ? conversation.userB
-          : conversation.userA;
-      if (await areUsersBlocked(app.db, socket.data.userId, recipientId)) {
-        socket.emit('message:error', { error: 'Conversation is unavailable' });
-        return;
-      }
-      const revealed = await hasReveal(app.db, socket.data.userId, recipientId);
-      if (!revealed && input.type !== 'text') {
-        socket.emit('message:error', { error: 'Media requires a reveal' });
+      if (!result.success) {
+        socket.emit('message:error', { error: result.error });
         return;
       }
 
-      if (input.mediaId !== undefined) {
-        const [ownedMedia] = await app.db
-          .select({ id: media.id })
-          .from(media)
-          .where(
-            and(
-              eq(media.id, input.mediaId),
-              eq(media.ownerId, socket.data.userId),
-              eq(media.kind, 'chat'),
-            ),
-          )
-          .limit(1);
-        if (ownedMedia === undefined) {
-          socket.emit('message:error', { error: 'Media is unavailable' });
-          return;
-        }
-      }
-
-      let [message] = await app.db
-        .insert(messages)
-        .values({
-          conversationId: conversation.id,
-          senderId: socket.data.userId,
-          type: input.type,
-          body: input.body,
-          mediaId: input.mediaId,
-        })
-        .returning();
-      if (message === undefined) {
-        throw new Error('Failed to save message');
-      }
-
-      const recipientRoom = userRoomName(recipientId);
+      let { message } = result;
+      const recipientRoom = userRoomName(result.recipientId);
       const recipientSockets = await sockets.in(recipientRoom).fetchSockets();
       if (recipientSockets.length > 0) {
         const [deliveredMessage] = await app.db
@@ -155,25 +85,27 @@ export function registerChatSocketHandlers(
         }
       }
 
-      const warning = !revealed && containsPersonalInfo(input.body ?? '');
-      sockets.to(recipientRoom).emit('message:new', { ...message, warning });
-      socket.emit('message:sent', { ...message, warning });
+      sockets.to(recipientRoom).emit('message:new', {
+        ...message,
+        warning: result.warning,
+      });
+      socket.emit('message:sent', { ...message, warning: result.warning });
 
       const [mute] = await app.db
         .select({ userId: conversationMutes.userId })
         .from(conversationMutes)
         .where(
           and(
-            eq(conversationMutes.conversationId, conversation.id),
-            eq(conversationMutes.userId, recipientId),
+            eq(conversationMutes.conversationId, message.conversationId),
+            eq(conversationMutes.userId, result.recipientId),
           ),
         )
         .limit(1);
       if (recipientSockets.length === 0 && mute === undefined) {
-        await app.notificationService.push(recipientId, {
+        await app.notificationService.push(result.recipientId, {
           title: 'New message',
-          body: input.type === 'text' ? input.body ?? '' : 'You received a message',
-          data: { conversationId: conversation.id },
+          body: message.type === 'text' ? message.body ?? '' : 'You received a message',
+          data: { conversationId: message.conversationId },
         });
       }
     });

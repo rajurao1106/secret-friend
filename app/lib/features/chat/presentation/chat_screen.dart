@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -6,7 +7,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:secret_friend/core/network/media_upload_service.dart';
 import 'package:secret_friend/core/network/secret_friend_api.dart';
 import 'package:secret_friend/core/session/session_controller.dart';
-import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:url_launcher/url_launcher.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
@@ -24,7 +24,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _scrollController = ScrollController();
   final List<Map<String, dynamic>> _messages = [];
   SecretFriendApi? _api;
-  io.Socket? _socket;
+  Timer? _pollTimer;
+  bool _polling = false;
   String? _conversationId;
   String? _error;
   bool _loading = true;
@@ -39,9 +40,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   @override
   void dispose() {
+    _pollTimer?.cancel();
     _messageController.dispose();
     _scrollController.dispose();
-    _socket?.dispose();
     super.dispose();
   }
 
@@ -72,11 +73,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           ..clear()
           ..addAll(rawItems.whereType<Map<String, dynamic>>());
       }
-      _revealed = profileResponse.data?['revealed'] == true;
-      _connectSocket(api, id);
+      _revealed =
+          historyResponse.data?['revealed'] == true ||
+          profileResponse.data?['revealed'] == true;
+      await api.request<void>(
+        '/conversations/$id/read',
+        method: 'POST',
+        data: <String, dynamic>{},
+      );
       if (mounted) {
         setState(() => _loading = false);
         _scrollToBottom();
+        _pollTimer = Timer.periodic(
+          const Duration(seconds: 4),
+          (_) => unawaited(_pollMessages()),
+        );
       }
     } catch (error) {
       if (mounted) {
@@ -88,54 +99,52 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     }
   }
 
-  void _connectSocket(SecretFriendApi api, String conversationId) {
-    final socket = io.io(
-      api.baseUrl,
-      io.OptionBuilder()
-          .setTransports(['websocket'])
-          .setAuth({'token': api.accessToken})
-          .disableAutoConnect()
-          .build(),
-    );
-    _socket = socket;
-    socket.onConnect((_) {
-      socket.emit('conversation:join', {'conversationId': conversationId});
-      socket.emit('message:read', {'conversationId': conversationId});
-    });
-    socket.on('message:new', (dynamic payload) => _handleIncoming(payload));
-    socket.on('message:sent', (dynamic payload) => _handleIncoming(payload));
-    socket.on('reveal:unlocked', (dynamic _) {
-      if (mounted) setState(() => _revealed = true);
-    });
-    socket.on('message:error', (dynamic payload) {
-      if (mounted) {
-        setState(
-          () => _error = _payloadError(payload) ?? 'Could not send message.',
-        );
-      }
-    });
-    socket.on('chat:error', (dynamic payload) {
-      if (mounted) {
-        setState(
-          () => _error = _payloadError(payload) ?? 'Chat is unavailable.',
-        );
-      }
-    });
-    socket.onConnectError((dynamic _) {
-      if (mounted) {
-        setState(
-          () => _error = 'Live chat could not connect. Reopen to retry.',
-        );
-      }
-    });
-    socket.connect();
-  }
+  Future<void> _pollMessages() async {
+    final api = _api;
+    final conversationId = _conversationId;
+    if (_polling || api == null || conversationId == null || !mounted) return;
+    _polling = true;
 
-  String? _payloadError(dynamic payload) {
-    if (payload is Map && payload['error'] is String) {
-      return payload['error'] as String;
+    try {
+      final latest = _messages.isEmpty ? null : _messages.last;
+      final createdAt = latest?['createdAt'];
+      final messageId = latest?['id'];
+      final after = createdAt is String && messageId is String
+          ? base64Url
+                .encode(
+                  utf8.encode(
+                    jsonEncode({'createdAt': createdAt, 'id': messageId}),
+                  ),
+                )
+                .replaceAll('=', '')
+          : null;
+      final response = await api.request<Map<String, dynamic>>(
+        '/conversations/$conversationId/messages',
+        queryParameters: {'after': ?after},
+      );
+      final rawItems = response.data?['items'];
+      final previousCount = _messages.length;
+      if (rawItems is List) {
+        for (final message in rawItems.whereType<Map<String, dynamic>>()) {
+          _handleIncoming(message);
+        }
+      }
+      final isRevealed = response.data?['revealed'] == true;
+      if (mounted && isRevealed != _revealed) {
+        setState(() => _revealed = isRevealed);
+      }
+      if (_messages.length > previousCount) {
+        await api.request<void>(
+          '/conversations/$conversationId/read',
+          method: 'POST',
+          data: <String, dynamic>{},
+        );
+      }
+    } catch (error) {
+      if (mounted) setState(() => _error = api.errorMessage(error));
+    } finally {
+      _polling = false;
     }
-    return null;
   }
 
   void _handleIncoming(dynamic payload) {
@@ -164,26 +173,27 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   Future<void> _sendMessage() async {
     final body = _messageController.text.trim();
-    final socket = _socket;
     final conversationId = _conversationId;
-    if (body.isEmpty || socket == null || conversationId == null) return;
-    if (!socket.connected) {
-      setState(
-        () => _error = 'Reconnecting to chat. Please try again in a moment.',
-      );
-      return;
-    }
+    final api = _api;
+    if (body.isEmpty || api == null || conversationId == null) return;
     setState(() {
       _sending = true;
       _error = null;
     });
-    socket.emit('message:send', {
-      'conversationId': conversationId,
-      'type': 'text',
-      'body': body,
-    });
-    _messageController.clear();
-    if (mounted) setState(() => _sending = false);
+    try {
+      final response = await api.request<Map<String, dynamic>>(
+        '/conversations/$conversationId/messages',
+        method: 'POST',
+        data: {'type': 'text', 'body': body},
+      );
+      _messageController.clear();
+      final message = response.data;
+      if (message != null) _handleIncoming(message);
+    } catch (error) {
+      if (mounted) setState(() => _error = api.errorMessage(error));
+    } finally {
+      if (mounted) setState(() => _sending = false);
+    }
   }
 
   Future<void> _requestReveal() async {
@@ -214,13 +224,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       return;
     }
     final conversationId = _conversationId;
-    final socket = _socket;
     final api = _api;
-    if (conversationId == null ||
-        socket == null ||
-        api == null ||
-        !socket.connected) {
-      setState(() => _error = 'Chat is reconnecting. Please try again.');
+    if (conversationId == null || api == null) {
+      setState(() => _error = 'Chat is not ready. Please try again.');
       return;
     }
     try {
@@ -246,12 +252,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           .uploadChatAttachment(file: file, conversationId: conversationId);
       final extension = file.extension?.toLowerCase();
       final isImage = const {'jpg', 'jpeg', 'png', 'webp'}.contains(extension);
-      socket.emit('message:send', {
-        'conversationId': conversationId,
-        'type': isImage ? 'image' : 'file',
-        'mediaId': mediaId,
-        'body': file.name,
-      });
+      final response = await api.request<Map<String, dynamic>>(
+        '/conversations/$conversationId/messages',
+        method: 'POST',
+        data: {
+          'type': isImage ? 'image' : 'file',
+          'mediaId': mediaId,
+          'body': file.name,
+        },
+      );
+      final message = response.data;
+      if (message != null) _handleIncoming(message);
     } catch (error) {
       if (mounted) setState(() => _error = api.errorMessage(error));
     } finally {

@@ -8,6 +8,7 @@ import {
   lt,
   notInArray,
   or,
+  sql,
 } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
@@ -20,6 +21,8 @@ import {
 } from '../schema/index.js';
 import { areUsersBlocked, getConversationForUser } from '../services/conversation-access.js';
 import { hasReveal } from '../services/reveal-access.js';
+import { createChatMessage } from '../services/chat-message.js';
+import { MessageRateLimiter } from '../services/message-rate-limiter.js';
 
 const conversationSchema = z.object({ otherUserId: z.string().uuid() });
 const listQuerySchema = z.object({
@@ -27,7 +30,13 @@ const listQuerySchema = z.object({
 });
 const historyQuerySchema = z.object({
   cursor: z.string().optional(),
+  after: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
+});
+const sendMessageBodySchema = z.object({
+  type: z.enum(['text', 'image', 'file']).default('text'),
+  body: z.string().max(2000).optional(),
+  mediaId: z.string().uuid().optional(),
 });
 const cursorSchema = z.object({
   createdAt: z.string().datetime(),
@@ -57,6 +66,8 @@ function encodeCursor(createdAt: Date, id: string): string {
 }
 
 export const chatRoutes: FastifyPluginAsync = async (app) => {
+  const messageLimiter = new MessageRateLimiter();
+
   app.get('/users', { preHandler: app.authenticate }, async (request, reply) => {
     const parsedQuery = listQuerySchema.safeParse(request.query);
     if (!parsedQuery.success) {
@@ -202,11 +213,18 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
 
   app.get<{ Params: { id: string } }>(
     '/conversations/:id/messages',
-    { preHandler: app.authenticate },
+    {
+      preHandler: app.authenticate,
+      config: { rateLimit: { max: 300, timeWindow: '15 minutes' } },
+    },
     async (request, reply) => {
       const conversationId = z.string().uuid().safeParse(request.params.id);
       const query = historyQuerySchema.safeParse(request.query);
-      if (!conversationId.success || !query.success) {
+      if (
+        !conversationId.success ||
+        !query.success ||
+        (query.data.cursor !== undefined && query.data.after !== undefined)
+      ) {
         return reply.code(400).send({ error: 'Invalid message history request' });
       }
       const conversation = await getConversationForUser(
@@ -226,7 +244,8 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const cursor = parseCursor(query.data.cursor);
-      if (cursor === null) {
+      const after = parseCursor(query.data.after);
+      if (cursor === null || after === null) {
         return reply.code(400).send({ error: 'Invalid cursor' });
       }
       const revealed = await hasReveal(app.db, request.user.sub, otherUserId);
@@ -234,7 +253,17 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
       if (!revealed) {
         filters.push(eq(messages.type, 'text'));
       }
-      if (cursor !== undefined) {
+      if (after !== undefined) {
+        filters.push(
+          or(
+            gt(messages.createdAt, after.createdAt),
+            and(
+              eq(messages.createdAt, after.createdAt),
+              gt(messages.id, after.id),
+            ),
+          )!,
+        );
+      } else if (cursor !== undefined) {
         filters.push(
           or(
             lt(messages.createdAt, cursor.createdAt),
@@ -245,23 +274,97 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
           )!,
         );
       }
-      const records = await app.db
+      const queryBuilder = app.db
         .select()
         .from(messages)
-        .where(and(...filters))
-        .orderBy(desc(messages.createdAt), desc(messages.id))
-        .limit(query.data.limit + 1);
+        .where(and(...filters));
+      const records =
+        after !== undefined
+          ? await queryBuilder
+              .orderBy(asc(messages.createdAt), asc(messages.id))
+              .limit(query.data.limit + 1)
+          : await queryBuilder
+              .orderBy(desc(messages.createdAt), desc(messages.id))
+              .limit(query.data.limit + 1);
       const hasMore = records.length > query.data.limit;
-      const page = records.slice(0, query.data.limit).reverse();
+      const page =
+        after !== undefined
+          ? records.slice(0, query.data.limit)
+          : records.slice(0, query.data.limit).reverse();
       const last = page.at(0);
 
       return reply.send({
         items: page,
+        revealed,
         nextCursor:
-          hasMore && last !== undefined
+          after === undefined && hasMore && last !== undefined
             ? encodeCursor(last.createdAt, last.id)
             : null,
       });
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/conversations/:id/messages',
+    { preHandler: app.authenticate },
+    async (request, reply) => {
+      const conversationId = z.string().uuid().safeParse(request.params.id);
+      const body = sendMessageBodySchema.safeParse(request.body);
+      if (!conversationId.success || !body.success) {
+        return reply.code(400).send({ error: 'Invalid message' });
+      }
+
+      const result = await createChatMessage(
+        app.db,
+        request.user.sub,
+        { ...body.data, conversationId: conversationId.data },
+        messageLimiter,
+      );
+      if (!result.success) {
+        return reply.code(result.statusCode).send({ error: result.error });
+      }
+      return reply.code(201).send({
+        ...result.message,
+        warning: result.warning,
+      });
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/conversations/:id/read',
+    { preHandler: app.authenticate },
+    async (request, reply) => {
+      const conversationId = z.string().uuid().safeParse(request.params.id);
+      if (!conversationId.success) {
+        return reply.code(400).send({ error: 'Invalid conversation id' });
+      }
+      const conversation = await getConversationForUser(
+        app.db,
+        conversationId.data,
+        request.user.sub,
+      );
+      if (conversation === undefined) {
+        return reply.code(404).send({ error: 'Conversation not found' });
+      }
+      const otherUserId =
+        conversation.userA === request.user.sub
+          ? conversation.userB
+          : conversation.userA;
+      if (await areUsersBlocked(app.db, request.user.sub, otherUserId)) {
+        return reply.code(403).send({ error: 'Conversation is unavailable' });
+      }
+
+      await app.db
+        .update(messages)
+        .set({ status: 'read' })
+        .where(
+          and(
+            eq(messages.conversationId, conversation.id),
+            inArray(messages.senderId, [otherUserId]),
+            sql`${messages.status} <> 'read'`,
+          ),
+        );
+      return reply.code(204).send();
     },
   );
 };

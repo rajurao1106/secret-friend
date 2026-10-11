@@ -11,8 +11,9 @@
   },
   "scripts": {
     "dev:server": "npm --prefix server run dev",
-    "dev:app": "cd app && flutter run -d chrome --web-port 5000 --dart-define=API_BASE_URL=http://127.0.0.1:3001",
-    "dev": "concurrently -n server,app -c green,cyan \"npm:dev:server\" \"npm:dev:app\""
+    "dev:app": "cd app && flutter run -d chrome --web-port 5000 --dart-define=API_BASE_URL=http://localhost:4000/api",
+    "dev": "concurrently -n server,app -c green,cyan \"npm:dev:server\" \"npm:dev:app\"",
+    "apk": "flutter build apk --release --dart-define=API_BASE_URL=https://secret-friend-rosy.vercel.app/api"
   },
   "keywords": [],
   "author": "",

@@ -48,12 +48,47 @@ and `POST /auth/logout`. Authenticated account deletion uses `DELETE /me`.
 Run `npm test`, `npm run typecheck`, and `npm run build` from `server` to
 validate the backend.
 
+### Deploy the backend to Vercel
+
+Import the GitHub repository into Vercel and set the project's **Root
+Directory** to `server`. Vercel detects the Fastify entrypoint at
+`src/index.ts`. Add these environment variables in the Vercel project settings:
+
+- `DATABASE_URL`: the Neon PostgreSQL connection string, including
+  `sslmode=require`
+- `JWT_SECRET` and `JWT_REFRESH_SECRET`: different private values, each at
+  least 32 characters
+- `CORS_ORIGIN`: the exact origin of the Flutter Web app, if you deploy the web
+  client; native Android/iOS clients do not need a browser origin
+- `OTP_PROVIDER=msg91`, `MSG91_AUTH_KEY`, and `MSG91_TEMPLATE_ID` when enabling
+  real OTP delivery; `mock` is for development only
+
+Apply the database migrations once against the same Neon database before using
+the deployment:
+
+```powershell
+Set-Location server
+npm run db:migrate
+```
+
+After deploying, use the Vercel deployment URL as the Flutter API base URL. The
+URL is compiled into the app, so rebuild it when the backend URL changes:
+
+```powershell
+Set-Location app
+flutter run --dart-define=API_BASE_URL=https://your-backend.vercel.app
+flutter build apk --release --dart-define=API_BASE_URL=https://your-backend.vercel.app
+```
+
+Chat messages use authenticated HTTP requests and refresh every four seconds
+while a conversation is open, so the app does not depend on an in-memory
+WebSocket connection across Vercel function instances.
+
 ## Flutter client
 
 The Flutter client uses the backend OTP flow, profile onboarding, discovery,
 chat/reveal requests, safety endpoints, account settings, and authenticated
-media endpoints. In mock OTP mode, read the code printed in the server console.
-Keep the API server running while using the app.
+media endpoints.
 
 For Flutter Web, development mode accepts localhost and 127.0.0.1 origins on
 any port, so Flutter's automatically selected web port works. Set
