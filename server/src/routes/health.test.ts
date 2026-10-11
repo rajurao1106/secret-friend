@@ -139,3 +139,44 @@ test('protects REST chat history, message, and read endpoints', async () => {
     await app.close();
   }
 });
+
+test('protects meetup participation, presence, roster, and request endpoints', async () => {
+  const app = buildApp(testConfig);
+  const requestId = '0e3cc201-74e3-4f75-adbc-5a7d16c842a7';
+  const requests = [
+    { method: 'GET' as const, url: '/meetup/today' },
+    {
+      method: 'PUT' as const,
+      url: '/meetup/interest',
+      payload: { interested: true, quickReply: false },
+    },
+    { method: 'POST' as const, url: '/meetup/check-in', payload: {} },
+    { method: 'POST' as const, url: '/meetup/presence', payload: {} },
+    { method: 'GET' as const, url: '/meetup/online' },
+    {
+      method: 'POST' as const,
+      url: '/meetup/requests',
+      payload: { userId: requestId },
+    },
+    { method: 'GET' as const, url: '/meetup/requests?type=received' },
+    {
+      method: 'POST' as const,
+      url: `/meetup/requests/${requestId}/accepted`,
+      payload: {},
+    },
+    {
+      method: 'POST' as const,
+      url: `/meetup/requests/${requestId}/declined`,
+      payload: {},
+    },
+  ];
+
+  try {
+    for (const request of requests) {
+      const response = await app.inject(request);
+      assert.equal(response.statusCode, 401, request.url);
+    }
+  } finally {
+    await app.close();
+  }
+});

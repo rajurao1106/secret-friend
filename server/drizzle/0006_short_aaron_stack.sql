@@ -1,0 +1,1 @@
+ALTER TABLE "meetup_requests" ALTER COLUMN "conversation_id" DROP NOT NULL;

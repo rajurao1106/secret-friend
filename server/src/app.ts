@@ -22,6 +22,7 @@ import { NoopModerationService } from './services/moderation.js';
 import { mediaRoutes } from './routes/media.js';
 import { KundaliMatchQueue } from './services/kundali-match-queue.js';
 import { UnconfiguredKundaliService } from './services/kundali.js';
+import { meetupRoutes } from './routes/meetup.js';
 
 export function buildApp(config: AppConfig) {
   const app = Fastify({ logger: config.NODE_ENV !== 'test' });
@@ -52,6 +53,7 @@ export function buildApp(config: AppConfig) {
     storage: mediaStorage,
   });
   app.register(chatRoutes);
+  app.register(meetupRoutes);
   app.register(discoverRoutes, {
     kundaliService: new UnconfiguredKundaliService(),
     queue: new KundaliMatchQueue(),

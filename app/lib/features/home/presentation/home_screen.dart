@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:secret_friend/core/network/secret_friend_api.dart';
@@ -17,14 +19,25 @@ class HomeScreen extends ConsumerStatefulWidget {
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends ConsumerState<HomeScreen> {
+class _HomeScreenState extends ConsumerState<HomeScreen>
+    with WidgetsBindingObserver {
   int _tab = 0;
   int _filter = 0;
   List<_Friend> _people = [];
+  List<_Friend> _onlineMeetupPeople = [];
   List<_Friend> _chats = [];
   List<Map<String, dynamic>> _requests = [];
+  List<Map<String, dynamic>> _meetupRequests = [];
+  List<Map<String, dynamic>> _sentMeetupRequests = [];
   List<Map<String, dynamic>> _hobbies = [];
+  Map<String, dynamic>? _meetup;
+  Timer? _meetupTimer;
+  bool _meetupLoading = true;
+  bool _meetupRefreshing = false;
+  bool _requestsRefreshing = false;
+  bool _isAppResumed = true;
   String? _requestsError;
+  String? _meetupError;
   bool _discoverLoading = true;
   bool _chatsLoading = true;
   bool _requestsLoading = true;
@@ -39,12 +52,35 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadHobbies();
       _loadDiscover();
       _loadChats();
       _loadRequests();
+      _refreshMeetup();
+      _meetupTimer = Timer.periodic(
+        const Duration(seconds: 20),
+        (_) => unawaited(_refreshMeetup()),
+      );
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _meetupTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _isAppResumed = true;
+      unawaited(_refreshMeetup());
+    } else {
+      _isAppResumed = false;
+    }
   }
 
   SecretFriendApi get _api => ref.read(secretFriendApiProvider);
@@ -57,9 +93,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       );
       if (!mounted) return;
       setState(() {
-        _hobbies = response.data
-                ?.whereType<Map<String, dynamic>>()
-                .toList(growable: false) ??
+        _hobbies =
+            response.data?.whereType<Map<String, dynamic>>().toList(
+              growable: false,
+            ) ??
             [];
       });
     } catch (error) {
@@ -78,10 +115,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       _discoverError = null;
     });
     try {
-      final selectedHobby =
-          _filter > 0 && _filter <= _hobbies.length
-              ? _hobbies[_filter - 1]['id'] as String?
-              : null;
+      final selectedHobby = _filter > 0 && _filter <= _hobbies.length
+          ? _hobbies[_filter - 1]['id'] as String?
+          : null;
       final response = await _api.request<Map<String, dynamic>>(
         '/discover',
         queryParameters: selectedHobby == null
@@ -137,14 +173,27 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Future<void> _loadRequests() async {
+    if (_requestsRefreshing) return;
+    _requestsRefreshing = true;
     try {
-      final response = await _api.request<List<dynamic>>(
-        '/friend-requests',
-        queryParameters: {'type': 'received'},
-      );
+      final responses = await Future.wait([
+        _api.request<List<dynamic>>(
+          '/friend-requests',
+          queryParameters: {'type': 'received'},
+        ),
+        _api.request<List<dynamic>>(
+          '/meetup/requests',
+          queryParameters: {'type': 'received'},
+        ),
+        _api.request<List<dynamic>>(
+          '/meetup/requests',
+          queryParameters: {'type': 'sent'},
+        ),
+      ]);
       if (!mounted) return;
       setState(() {
-        _requests = response.data
+        _requests =
+            responses[0].data
                 ?.whereType<Map<String, dynamic>>()
                 .where((item) {
                   final request = item['request'];
@@ -152,6 +201,21 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       request['status'] == 'pending';
                 })
                 .toList(growable: false) ??
+            [];
+        _meetupRequests =
+            responses[1].data
+                ?.whereType<Map<String, dynamic>>()
+                .where((item) {
+                  final request = item['request'];
+                  return request is Map<String, dynamic> &&
+                      request['status'] == 'pending';
+                })
+                .toList(growable: false) ??
+            [];
+        _sentMeetupRequests =
+            responses[2].data?.whereType<Map<String, dynamic>>().toList(
+              growable: false,
+            ) ??
             [];
         _requestsLoading = false;
         _requestsError = null;
@@ -163,6 +227,133 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           _requestsError = _api.errorMessage(error);
         });
       }
+    } finally {
+      _requestsRefreshing = false;
+    }
+  }
+
+  Future<void> _refreshMeetup({bool showError = false}) async {
+    if (_meetupRefreshing || !mounted) return;
+    _meetupRefreshing = true;
+    try {
+      final response = await _api.request<Map<String, dynamic>>(
+        '/meetup/today',
+      );
+      final meetup = response.data;
+      if (meetup == null) return;
+      List<_Friend> onlinePeople = _onlineMeetupPeople;
+      if (meetup['started'] == true) {
+        unawaited(_loadRequests());
+      }
+      if (meetup['started'] == true &&
+          meetup['checkedIn'] == true &&
+          _isAppResumed) {
+        await _api.request<void>(
+          '/meetup/presence',
+          method: 'POST',
+          data: <String, dynamic>{},
+        );
+        final onlineResponse = await _api.request<Map<String, dynamic>>(
+          '/meetup/online',
+        );
+        final items = onlineResponse.data?['items'];
+        onlinePeople = items is List
+            ? items
+                  .whereType<Map<String, dynamic>>()
+                  .map(_Friend.fromJson)
+                  .toList(growable: false)
+            : [];
+        meetup['onlineCount'] = onlineResponse.data?['onlineCount'] ?? 0;
+      } else {
+        onlinePeople = [];
+      }
+      if (!mounted) return;
+      setState(() {
+        _meetup = meetup;
+        _onlineMeetupPeople = onlinePeople;
+        _meetupLoading = false;
+        _meetupError = null;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _meetupLoading = false;
+        _meetupError = _api.errorMessage(error);
+      });
+      if (showError) _showMessage(_api.errorMessage(error));
+    } finally {
+      _meetupRefreshing = false;
+    }
+  }
+
+  Future<void> _setMeetupInterest({
+    required bool interested,
+    required bool quickReply,
+  }) async {
+    try {
+      await _api.request<void>(
+        '/meetup/interest',
+        method: 'PUT',
+        data: {'interested': interested, 'quickReply': quickReply},
+      );
+      await _refreshMeetup();
+    } catch (error) {
+      _showMessage(_api.errorMessage(error));
+    }
+  }
+
+  Future<void> _checkInToMeetup() async {
+    try {
+      await _api.request<void>(
+        '/meetup/check-in',
+        method: 'POST',
+        data: <String, dynamic>{},
+      );
+      await _refreshMeetup();
+      _showMessage('You are checked in. Choose someone online to say hello.');
+    } catch (error) {
+      _showMessage(_api.errorMessage(error));
+    }
+  }
+
+  Future<void> _sendMeetupRequest(_Friend friend) async {
+    try {
+      await _api.request<void>(
+        '/meetup/requests',
+        method: 'POST',
+        data: {'userId': friend.id},
+      );
+      await _loadRequests();
+      _showMessage('Meetup chat request sent to ${friend.nickname}.');
+    } catch (error) {
+      _showMessage(_api.errorMessage(error));
+    }
+  }
+
+  Future<void> _respondToMeetupRequest(
+    Map<String, dynamic> row, {
+    required bool accept,
+  }) async {
+    final request = row['request'];
+    final otherUser = row['otherUser'];
+    if (request is! Map<String, dynamic> ||
+        request['id'] is! String ||
+        otherUser is! Map<String, dynamic>) {
+      return;
+    }
+    final requestId = request['id']! as String;
+    try {
+      await _api.request<void>(
+        '/meetup/requests/$requestId/${accept ? 'accepted' : 'declined'}',
+        method: 'POST',
+      );
+      await _loadRequests();
+      _showMessage(
+        accept ? 'Meetup request accepted.' : 'Meetup request declined.',
+      );
+      if (accept) await _openChat(_Friend.fromJson(otherUser));
+    } catch (error) {
+      _showMessage(_api.errorMessage(error));
     }
   }
 
@@ -245,6 +436,24 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           padding: const EdgeInsets.fromLTRB(22, 8, 22, 28),
           sliver: SliverList(
             delegate: SliverChildListDelegate([
+              if (_meetupLoading)
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 18),
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else if (_meetupError != null)
+                _LoadError(
+                  message: _meetupError!,
+                  onRetry: () => _refreshMeetup(showError: true),
+                )
+              else if (_meetup != null) ...[
+                _meetupCard(),
+                const SizedBox(height: 18),
+                if (_meetup?['checkedIn'] == true) ...[
+                  _onlineMeetupSection(),
+                  const SizedBox(height: 18),
+                ],
+              ],
               const _PrivacyNote(),
               const SizedBox(height: 26),
               Text(
@@ -274,49 +483,258 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               ),
               const SizedBox(height: 20),
               if (_discoverLoading)
-              const Padding(
-                padding: EdgeInsets.symmetric(vertical: 36),
-                child: Center(child: CircularProgressIndicator()),
-              )
+                const Padding(
+                  padding: EdgeInsets.symmetric(vertical: 36),
+                  child: Center(child: CircularProgressIndicator()),
+                )
               else if (_discoverError != null)
-              _LoadError(
-                message: _discoverError!,
-                onRetry: _loadDiscover,
-              )
+                _LoadError(message: _discoverError!, onRetry: _loadDiscover)
               else if (_people.isEmpty)
-              const _EmptyPeople()
+                const _EmptyPeople()
               else ...[
-              _featuredCard(_people.first),
-              const SizedBox(height: 28),
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      'More kindred spirits',
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        color: _ink,
-                        fontSize: 19,
-                        fontWeight: FontWeight.w700,
+                _featuredCard(_people.first),
+                const SizedBox(height: 28),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'More kindred spirits',
+                        style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                          color: _ink,
+                          fontSize: 19,
+                          fontWeight: FontWeight.w700,
+                        ),
                       ),
                     ),
-                  ),
-                  TextButton(onPressed: _loadDiscover, child: const Text('Refresh')),
-                ],
-              ),
-              const SizedBox(height: 8),
-              for (final person in _people.skip(1)) ...[
-                _FriendListTile(
-                  friend: person,
-                  onTap: () => _openChat(person),
+                    TextButton(
+                      onPressed: _loadDiscover,
+                      child: const Text('Refresh'),
+                    ),
+                  ],
                 ),
+                const SizedBox(height: 8),
+                for (final person in _people.skip(1)) ...[
+                  _FriendListTile(
+                    friend: person,
+                    onTap: () => _openChat(person),
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 const SizedBox(height: 12),
-              ],
-              const SizedBox(height: 12),
-              const _GentleReminder(),
+                const _GentleReminder(),
               ],
             ]),
           ),
         ),
+      ],
+    );
+  }
+
+  Widget _meetupCard() {
+    final event = _meetup ?? const <String, dynamic>{};
+    final interested = event['interested'] == true;
+    final quickReply = event['quickReply'] == true;
+    final checkedIn = event['checkedIn'] == true;
+    final started = event['started'] == true;
+    final interestedCount = event['interestedCount'] as int? ?? 0;
+    final onlineCount = event['onlineCount'] as int? ?? 0;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF1EB),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: const Color(0xFFD5E3D8)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(Icons.groups_2_outlined, color: _forest, size: 25),
+              const SizedBox(width: 11),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Aaj raat 8 baje milte hain!',
+                      style: TextStyle(
+                        color: _ink,
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 5),
+                    Text(
+                      started
+                          ? '$onlineCount log abhi online hain'
+                          : 'Aaj 8:00 PM IST par naye logon se baat karein.',
+                      style: const TextStyle(
+                        color: _muted,
+                        fontSize: 12,
+                        height: 1.4,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                '$interestedCount interested',
+                style: const TextStyle(
+                  color: _forest,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 13),
+          if (interested && !checkedIn)
+            FilledButton.icon(
+              onPressed: started ? _checkInToMeetup : null,
+              icon: Icon(started ? Icons.login_rounded : Icons.check_rounded),
+              label: Text(started ? "I'm online" : "You're interested"),
+            )
+          else if (checkedIn)
+            Row(
+              children: [
+                const Icon(Icons.check_circle, size: 18, color: _forest),
+                const SizedBox(width: 7),
+                const Expanded(
+                  child: Text(
+                    "You're checked in. Say hello to someone online below.",
+                    style: TextStyle(color: _forest, fontSize: 12),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () =>
+                      _setMeetupInterest(interested: false, quickReply: false),
+                  child: const Text('Go offline'),
+                ),
+              ],
+            )
+          else
+            FilledButton.icon(
+              onPressed: () =>
+                  _setMeetupInterest(interested: true, quickReply: false),
+              icon: const Icon(Icons.favorite_border_rounded),
+              label: const Text("I'm interested"),
+            ),
+          if (interested)
+            SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: const Text(
+                'I can reply quickly',
+                style: TextStyle(
+                  color: _ink,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              subtitle: const Text(
+                'A quick-reply intention, not a guaranteed response.',
+                style: TextStyle(color: _muted, fontSize: 10),
+              ),
+              value: quickReply,
+              onChanged: (value) =>
+                  _setMeetupInterest(interested: true, quickReply: value),
+            ),
+          if (interested && !checkedIn)
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () =>
+                    _setMeetupInterest(interested: false, quickReply: false),
+                child: const Text('Not interested anymore'),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _onlineMeetupSection() {
+    final sentRequests = <String, Map<String, dynamic>>{};
+    for (final row in _sentMeetupRequests) {
+      final user = row['otherUser'];
+      final request = row['request'];
+      if (user is Map<String, dynamic> &&
+          user['id'] is String &&
+          request is Map<String, dynamic>) {
+        sentRequests[user['id']! as String] = request;
+      }
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Expanded(
+              child: Text(
+                'Online at the meetup',
+                style: TextStyle(
+                  color: _ink,
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            ),
+            IconButton(
+              tooltip: 'Refresh online people',
+              onPressed: () => _refreshMeetup(showError: true),
+              icon: const Icon(Icons.refresh_rounded, color: _forest),
+            ),
+          ],
+        ),
+        const Text(
+          'Choose someone to send a chat request. You both stay anonymous until you choose to reveal.',
+          style: TextStyle(color: _muted, fontSize: 12, height: 1.4),
+        ),
+        const SizedBox(height: 10),
+        if (_onlineMeetupPeople.isEmpty)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 14),
+            child: Text(
+              'No one else is online yet. Check back in a moment.',
+              style: TextStyle(color: _muted, fontSize: 12),
+            ),
+          )
+        else
+          for (final person in _onlineMeetupPeople) ...[
+            _MeetupPersonTile(
+              friend: person,
+              request: sentRequests[person.id],
+              onRequest: () => _sendMeetupRequest(person),
+              onChat: () => _openChat(person),
+            ),
+            const SizedBox(height: 9),
+          ],
+        if (_sentMeetupRequests.isNotEmpty) ...[
+          const SizedBox(height: 12),
+          const Text(
+            'Your meetup requests',
+            style: TextStyle(
+              color: _ink,
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 8),
+          for (final row in _sentMeetupRequests)
+            _MeetupSentRequestTile(
+              row: row,
+              onChat: () {
+                final otherUser = row['otherUser'];
+                if (otherUser is Map<String, dynamic>) {
+                  _openChat(_Friend.fromJson(otherUser));
+                }
+              },
+            ),
+        ],
       ],
     );
   }
@@ -502,8 +920,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       return _SimpleTabContent(
         icon: Icons.forum_outlined,
         title: 'Good talks begin here',
-        subtitle:
-            'There are no other profiles yet. Invite a friend to join Secret Friend.',
+        subtitle: 'There are no other profiles yet. Invite a friend to join Secret Friend.',
         action: 'Refresh people',
         onAction: _loadChats,
       );
@@ -534,16 +951,19 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 
   Widget _requestsTab() {
-    if (_requestsLoading) return const Center(child: CircularProgressIndicator());
+    if (_requestsLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
     if (_requestsError != null) {
       return _LoadError(message: _requestsError!, onRetry: _loadRequests);
     }
-    if (_requests.isEmpty) {
+    if (_requests.isEmpty &&
+        _meetupRequests.isEmpty &&
+        _sentMeetupRequests.isEmpty) {
       return _SimpleTabContent(
         icon: Icons.waving_hand_outlined,
-        title: 'No new reveal requests',
-        subtitle:
-            'Requests appear after you and a friend have chatted and someone asks to reveal.',
+        title: 'No new requests',
+        subtitle: 'Meetup chat requests and requests to reveal your profile will appear here.',
         action: 'Discover friends',
         onAction: () => setState(() => _tab = 0),
       );
@@ -553,26 +973,73 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 14, 20, 24),
         children: [
-          const Text(
-            'Reveal requests',
-            style: TextStyle(
-              color: _ink,
-              fontSize: 19,
-              fontWeight: FontWeight.w800,
+          if (_meetupRequests.isNotEmpty) ...[
+            const Text(
+              'Tonight meetup requests',
+              style: TextStyle(
+                color: _ink,
+                fontSize: 19,
+                fontWeight: FontWeight.w800,
+              ),
             ),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Your details unlock only when you accept each other.',
-            style: TextStyle(color: _muted, fontSize: 12),
-          ),
-          const SizedBox(height: 15),
-          for (final row in _requests)
-            _RevealRequestCard(
-              row: row,
-              onAccept: () => _respondToRequest(row, accept: true),
-              onReject: () => _respondToRequest(row, accept: false),
+            const SizedBox(height: 6),
+            const Text(
+              'Accepting starts an anonymous chat. It does not reveal your profile.',
+              style: TextStyle(color: _muted, fontSize: 12),
             ),
+            const SizedBox(height: 15),
+            for (final row in _meetupRequests)
+              _MeetupRequestCard(
+                row: row,
+                onAccept: () => _respondToMeetupRequest(row, accept: true),
+                onDecline: () => _respondToMeetupRequest(row, accept: false),
+              ),
+          ],
+          if (_sentMeetupRequests.isNotEmpty) ...[
+            const SizedBox(height: 15),
+            const Text(
+              'Meetup requests you sent',
+              style: TextStyle(
+                color: _ink,
+                fontSize: 19,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 10),
+            for (final row in _sentMeetupRequests)
+              _MeetupSentRequestTile(
+                row: row,
+                onChat: () {
+                  final otherUser = row['otherUser'];
+                  if (otherUser is Map<String, dynamic>) {
+                    _openChat(_Friend.fromJson(otherUser));
+                  }
+                },
+              ),
+          ],
+          if (_requests.isNotEmpty) ...[
+            const SizedBox(height: 15),
+            const Text(
+              'Reveal requests',
+              style: TextStyle(
+                color: _ink,
+                fontSize: 19,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Your details unlock only when you accept each other.',
+              style: TextStyle(color: _muted, fontSize: 12),
+            ),
+            const SizedBox(height: 15),
+            for (final row in _requests)
+              _RevealRequestCard(
+                row: row,
+                onAccept: () => _respondToRequest(row, accept: true),
+                onReject: () => _respondToRequest(row, accept: false),
+              ),
+          ],
         ],
       ),
     );
@@ -629,7 +1096,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           icon: Icons.interests_outlined,
           title: 'Your interests',
           subtitle: hobbyNames.isEmpty ? 'No interests selected' : hobbyNames,
-          onTap: () => _showMessage('You can update interests from profile setup later.'),
+          onTap: () => _showMessage(
+            'You can update interests from profile setup later.',
+          ),
         ),
         SwitchListTile.adaptive(
           contentPadding: const EdgeInsets.symmetric(horizontal: 4),
@@ -685,7 +1154,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         method: 'POST',
       );
       await _loadRequests();
-      _showMessage(accept ? 'You revealed your profiles to each other.' : 'Request declined.');
+      _showMessage(
+        accept
+            ? 'You revealed your profiles to each other.'
+            : 'Request declined.',
+      );
       final otherUser = row['otherUser'];
       if (accept && otherUser is Map<String, dynamic>) {
         await _openChat(_Friend.fromJson(otherUser));
@@ -703,7 +1176,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           children: [
             const ListTile(
               title: Text('Privacy & safety'),
-              subtitle: Text('Your details are protected until a mutual reveal.'),
+              subtitle: Text(
+                'Your details are protected until a mutual reveal.',
+              ),
             ),
             ListTile(
               leading: const Icon(Icons.block_outlined),
@@ -729,7 +1204,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                 ? const Text('You have not blocked anyone.')
                 : ListView(
                     shrinkWrap: true,
-                    children: blockList.whereType<Map<String, dynamic>>().map((item) {
+                    children: blockList.whereType<Map<String, dynamic>>().map((
+                      item,
+                    ) {
                       final id = item['id'] as String? ?? '';
                       return ListTile(
                         title: Text(item['nickname'] as String? ?? 'Friend'),
@@ -773,7 +1250,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               onTap: () => Navigator.pop(context, 'logout'),
             ),
             ListTile(
-              leading: const Icon(Icons.delete_outline_rounded, color: Colors.red),
+              leading: const Icon(
+                Icons.delete_outline_rounded,
+                color: Colors.red,
+              ),
               title: const Text('Delete my account'),
               onTap: () => Navigator.pop(context, 'delete'),
             ),
@@ -1024,10 +1504,7 @@ class _InterestChip extends StatelessWidget {
 }
 
 class _FriendListTile extends StatelessWidget {
-  const _FriendListTile({
-    required this.friend,
-    required this.onTap,
-  });
+  const _FriendListTile({required this.friend, required this.onTap});
 
   final _Friend friend;
   final VoidCallback onTap;
@@ -1085,6 +1562,197 @@ class _FriendListTile extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _MeetupPersonTile extends StatelessWidget {
+  const _MeetupPersonTile({
+    required this.friend,
+    required this.request,
+    required this.onRequest,
+    required this.onChat,
+  });
+
+  final _Friend friend;
+  final Map<String, dynamic>? request;
+  final VoidCallback onRequest;
+  final VoidCallback onChat;
+
+  @override
+  Widget build(BuildContext context) {
+    final status = request?['status'];
+    final canChat = status == 'accepted';
+    final alreadyRequested = status == 'pending' || status == 'declined';
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _line),
+      ),
+      child: Row(
+        children: [
+          _FriendAvatar(friend: friend, size: 50),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  friend.nickname,
+                  style: const TextStyle(
+                    color: _ink,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Row(
+                  children: [
+                    const Icon(Icons.circle, color: Color(0xFF66A77A), size: 8),
+                    const SizedBox(width: 5),
+                    const Text(
+                      'Online',
+                      style: TextStyle(color: _muted, fontSize: 10),
+                    ),
+                    if (friend.quickReply) ...[
+                      const SizedBox(width: 8),
+                      const Icon(
+                        Icons.flash_on_rounded,
+                        color: Color(0xFFC58B36),
+                        size: 13,
+                      ),
+                      const SizedBox(width: 2),
+                      const Text(
+                        'Quick reply',
+                        style: TextStyle(
+                          color: Color(0xFF9A6A20),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+          if (canChat)
+            FilledButton.tonal(onPressed: onChat, child: const Text('Chat'))
+          else
+            FilledButton.tonal(
+              onPressed: alreadyRequested ? null : onRequest,
+              child: Text(
+                status == 'pending'
+                    ? 'Requested'
+                    : status == 'declined'
+                    ? 'Declined'
+                    : 'Say hello',
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MeetupRequestCard extends StatelessWidget {
+  const _MeetupRequestCard({
+    required this.row,
+    required this.onAccept,
+    required this.onDecline,
+  });
+
+  final Map<String, dynamic> row;
+  final VoidCallback onAccept;
+  final VoidCallback onDecline;
+
+  @override
+  Widget build(BuildContext context) {
+    final rawUser = row['otherUser'];
+    if (rawUser is! Map<String, dynamic>) return const SizedBox.shrink();
+    final friend = _Friend.fromJson(rawUser);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: _line),
+      ),
+      child: Row(
+        children: [
+          _FriendAvatar(friend: friend, size: 48),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              '${friend.nickname} wants to start an anonymous chat.',
+              style: const TextStyle(color: _ink, fontSize: 12, height: 1.4),
+            ),
+          ),
+          IconButton(
+            tooltip: 'Decline',
+            onPressed: onDecline,
+            icon: const Icon(Icons.close_rounded, color: _muted),
+          ),
+          IconButton(
+            tooltip: 'Accept and chat',
+            onPressed: onAccept,
+            icon: const Icon(Icons.check_circle, color: _forest),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MeetupSentRequestTile extends StatelessWidget {
+  const _MeetupSentRequestTile({required this.row, required this.onChat});
+
+  final Map<String, dynamic> row;
+  final VoidCallback onChat;
+
+  @override
+  Widget build(BuildContext context) {
+    final rawUser = row['otherUser'];
+    final request = row['request'];
+    if (rawUser is! Map<String, dynamic> || request is! Map<String, dynamic>) {
+      return const SizedBox.shrink();
+    }
+    final friend = _Friend.fromJson(rawUser);
+    final status = request['status'];
+    final label = switch (status) {
+      'accepted' => 'Accepted',
+      'declined' => 'Declined',
+      _ => 'Waiting for reply',
+    };
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _line),
+      ),
+      child: Row(
+        children: [
+          _FriendAvatar(friend: friend, size: 38),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '${friend.nickname} · $label',
+              style: const TextStyle(
+                color: _ink,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          if (status == 'accepted')
+            TextButton(onPressed: onChat, child: const Text('Open chat')),
+        ],
       ),
     );
   }
@@ -1222,189 +1890,189 @@ class _SettingsTile extends StatelessWidget {
   }
 }
 
-  class _RevealRequestCard extends StatelessWidget {
-    const _RevealRequestCard({
-      required this.row,
-      required this.onAccept,
-      required this.onReject,
-    });
+class _RevealRequestCard extends StatelessWidget {
+  const _RevealRequestCard({
+    required this.row,
+    required this.onAccept,
+    required this.onReject,
+  });
 
-    final Map<String, dynamic> row;
-    final VoidCallback onAccept;
-    final VoidCallback onReject;
+  final Map<String, dynamic> row;
+  final VoidCallback onAccept;
+  final VoidCallback onReject;
 
-    @override
-    Widget build(BuildContext context) {
-      final user = row['otherUser'] is Map<String, dynamic>
-          ? row['otherUser']! as Map<String, dynamic>
-          : <String, dynamic>{};
-      final friend = _Friend.fromJson(user);
-      return Container(
-        margin: const EdgeInsets.only(bottom: 12),
-        padding: const EdgeInsets.all(15),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: _line),
-        ),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                _FriendAvatar(friend: friend, size: 54),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        friend.nickname,
-                        style: const TextStyle(
-                          color: _ink,
-                          fontWeight: FontWeight.w800,
-                        ),
+  @override
+  Widget build(BuildContext context) {
+    final user = row['otherUser'] is Map<String, dynamic>
+        ? row['otherUser']! as Map<String, dynamic>
+        : <String, dynamic>{};
+    final friend = _Friend.fromJson(user);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(15),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: _line),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              _FriendAvatar(friend: friend, size: 54),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      friend.nickname,
+                      style: const TextStyle(
+                        color: _ink,
+                        fontWeight: FontWeight.w800,
                       ),
-                      const SizedBox(height: 3),
-                      const Text(
-                        'Would like to reveal their profile',
-                        style: TextStyle(color: _muted, fontSize: 11),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 13),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: onReject,
-                    child: const Text('Not now'),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: FilledButton(
-                    onPressed: onAccept,
-                    style: FilledButton.styleFrom(
-                      backgroundColor: _forest,
-                      foregroundColor: Colors.white,
                     ),
-                    child: const Text('Reveal together'),
-                  ),
+                    const SizedBox(height: 3),
+                    const Text(
+                      'Would like to reveal their profile',
+                      style: TextStyle(color: _muted, fontSize: 11),
+                    ),
+                  ],
                 ),
-              ],
-            ),
-          ],
-        ),
-      );
-    }
-  }
-
-  class _LoadError extends StatelessWidget {
-    const _LoadError({required this.message, required this.onRetry});
-
-    final String message;
-    final VoidCallback onRetry;
-
-    @override
-    Widget build(BuildContext context) {
-      return Padding(
-        padding: const EdgeInsets.symmetric(vertical: 24),
-        child: Column(
-          children: [
-            const Icon(Icons.cloud_off_outlined, color: _muted, size: 35),
-            const SizedBox(height: 10),
-            Text(
-              message,
-              textAlign: TextAlign.center,
-              style: const TextStyle(color: _muted, fontSize: 12),
-            ),
-            const SizedBox(height: 10),
-            TextButton.icon(
-              onPressed: onRetry,
-              icon: const Icon(Icons.refresh_rounded),
-              label: const Text('Try again'),
-            ),
-          ],
-        ),
-      );
-    }
-  }
-
-  class _EmptyPeople extends StatelessWidget {
-    const _EmptyPeople();
-
-    @override
-    Widget build(BuildContext context) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 40),
-        child: Column(
-          children: [
-            Icon(Icons.diversity_1_outlined, color: _forest, size: 48),
-            SizedBox(height: 14),
-            Text(
-              'Your people are on their way',
-              style: TextStyle(
-                color: _ink,
-                fontWeight: FontWeight.w800,
-                fontSize: 17,
               ),
-            ),
-            SizedBox(height: 7),
-            Text(
-              'There are no profiles to show yet. Check back soon.',
-              textAlign: TextAlign.center,
-              style: TextStyle(color: _muted, fontSize: 12),
-            ),
-          ],
-        ),
-      );
-    }
+            ],
+          ),
+          const SizedBox(height: 13),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: onReject,
+                  child: const Text('Not now'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton(
+                  onPressed: onAccept,
+                  style: FilledButton.styleFrom(
+                    backgroundColor: _forest,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('Reveal together'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
+}
 
-  class _SelfAvatar extends StatelessWidget {
-    const _SelfAvatar({required this.index});
+class _LoadError extends StatelessWidget {
+  const _LoadError({required this.message, required this.onRetry});
 
-    final int index;
+  final String message;
+  final VoidCallback onRetry;
 
-    static const _colors = [
-      Color(0xFFF2B58B),
-      Color(0xFFA9C7B5),
-      Color(0xFFEACB78),
-      Color(0xFFC1B2D8),
-      Color(0xFF8FC4CC),
-      Color(0xFFE39B9B),
-      Color(0xFFA6B7DD),
-      Color(0xFFC3CC8D),
-    ];
-    static const _icons = [
-      Icons.wb_twilight_rounded,
-      Icons.auto_awesome_rounded,
-      Icons.local_florist_rounded,
-      Icons.nightlight_round,
-      Icons.park_rounded,
-      Icons.water_drop_rounded,
-      Icons.cloud_rounded,
-      Icons.spa_rounded,
-    ];
-
-    @override
-    Widget build(BuildContext context) {
-      final normalized = index.abs() % _colors.length;
-      return Container(
-        width: 94,
-        height: 94,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: _colors[normalized],
-          border: Border.all(color: Colors.white, width: 4),
-        ),
-        child: Icon(_icons[normalized], color: _ink, size: 40),
-      );
-    }
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 24),
+      child: Column(
+        children: [
+          const Icon(Icons.cloud_off_outlined, color: _muted, size: 35),
+          const SizedBox(height: 10),
+          Text(
+            message,
+            textAlign: TextAlign.center,
+            style: const TextStyle(color: _muted, fontSize: 12),
+          ),
+          const SizedBox(height: 10),
+          TextButton.icon(
+            onPressed: onRetry,
+            icon: const Icon(Icons.refresh_rounded),
+            label: const Text('Try again'),
+          ),
+        ],
+      ),
+    );
   }
+}
+
+class _EmptyPeople extends StatelessWidget {
+  const _EmptyPeople();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Padding(
+      padding: EdgeInsets.symmetric(vertical: 40),
+      child: Column(
+        children: [
+          Icon(Icons.diversity_1_outlined, color: _forest, size: 48),
+          SizedBox(height: 14),
+          Text(
+            'Your people are on their way',
+            style: TextStyle(
+              color: _ink,
+              fontWeight: FontWeight.w800,
+              fontSize: 17,
+            ),
+          ),
+          SizedBox(height: 7),
+          Text(
+            'There are no profiles to show yet. Check back soon.',
+            textAlign: TextAlign.center,
+            style: TextStyle(color: _muted, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SelfAvatar extends StatelessWidget {
+  const _SelfAvatar({required this.index});
+
+  final int index;
+
+  static const _colors = [
+    Color(0xFFF2B58B),
+    Color(0xFFA9C7B5),
+    Color(0xFFEACB78),
+    Color(0xFFC1B2D8),
+    Color(0xFF8FC4CC),
+    Color(0xFFE39B9B),
+    Color(0xFFA6B7DD),
+    Color(0xFFC3CC8D),
+  ];
+  static const _icons = [
+    Icons.wb_twilight_rounded,
+    Icons.auto_awesome_rounded,
+    Icons.local_florist_rounded,
+    Icons.nightlight_round,
+    Icons.park_rounded,
+    Icons.water_drop_rounded,
+    Icons.cloud_rounded,
+    Icons.spa_rounded,
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final normalized = index.abs() % _colors.length;
+    return Container(
+      width: 94,
+      height: 94,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: _colors[normalized],
+        border: Border.all(color: Colors.white, width: 4),
+      ),
+      child: Icon(_icons[normalized], color: _ink, size: 40),
+    );
+  }
+}
 
 class _BottomBar extends StatelessWidget {
   const _BottomBar({required this.currentIndex, required this.onChanged});
@@ -1507,6 +2175,7 @@ class _Friend {
     required this.color,
     required this.icon,
     required this.note,
+    this.quickReply = false,
   });
 
   factory _Friend.fromJson(Map<String, dynamic> json) {
@@ -1518,10 +2187,9 @@ class _Friend {
               .whereType<String>()
               .toList(growable: false)
         : <String>[];
-    final index = json['avatarIndex'] is int
-        ? json['avatarIndex']! as int
-        : 0;
-    final avatar = _SelfAvatar._colors[index.abs() % _SelfAvatar._colors.length];
+    final index = json['avatarIndex'] is int ? json['avatarIndex']! as int : 0;
+    final avatar =
+        _SelfAvatar._colors[index.abs() % _SelfAvatar._colors.length];
     return _Friend(
       id: json['id'] as String? ?? '',
       nickname: json['nickname'] as String? ?? 'Anonymous friend',
@@ -1534,6 +2202,7 @@ class _Friend {
       note: interests.isEmpty
           ? 'A new connection could start with a simple hello.'
           : 'Maybe you can swap stories about ${interests.first.toLowerCase()}.',
+      quickReply: json['quickReply'] == true,
     );
   }
 
@@ -1544,4 +2213,5 @@ class _Friend {
   final Color color;
   final IconData icon;
   final String note;
+  final bool quickReply;
 }

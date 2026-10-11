@@ -90,6 +90,13 @@ The Flutter client uses the backend OTP flow, profile onboarding, discovery,
 chat/reveal requests, safety endpoints, account settings, and authenticated
 media endpoints.
 
+The Home screen also includes a daily 8:00 PM India-time meetup. Users can
+register interest and optionally mark that they intend to reply quickly. At
+8:00 PM, interested users check in; checked-in users who keep the app open are
+shown in the online meetup list. Selecting someone sends a separate meetup chat
+request. Accepting starts an anonymous conversation without revealing either
+profile. Online status expires if the app stops sending its heartbeat.
+
 For Flutter Web, development mode accepts localhost and 127.0.0.1 origins on
 any port, so Flutter's automatically selected web port works. Set
 `CORS_ORIGIN` to the exact web origin when deploying outside local development.

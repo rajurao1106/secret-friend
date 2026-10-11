@@ -8,6 +8,7 @@ export * from './kundali-matches.js';
 export * from './media.js';
 export * from './media-uploads.js';
 export * from './messages.js';
+export * from './meetup.js';
 export * from './otp-codes.js';
 export * from './profiles.js';
 export * from './refresh-tokens.js';

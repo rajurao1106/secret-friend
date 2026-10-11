@@ -36,6 +36,20 @@
       "when": 1791697530202,
       "tag": "0004_nifty_moonstone",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791742868426,
+      "tag": "0005_normal_bloodstrike",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791743166468,
+      "tag": "0006_short_aaron_stack",
+      "breakpoints": true
     }
   ]
 }

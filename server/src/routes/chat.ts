@@ -23,6 +23,8 @@ import { areUsersBlocked, getConversationForUser } from '../services/conversatio
 import { hasReveal } from '../services/reveal-access.js';
 import { createChatMessage } from '../services/chat-message.js';
 import { MessageRateLimiter } from '../services/message-rate-limiter.js';
+import { meetupRequests } from '../schema/meetup.js';
+import { getMeetupTime } from '../services/meetup-time.js';
 
 const conversationSchema = z.object({ otherUserId: z.string().uuid() });
 const listQuerySchema = z.object({
@@ -189,6 +191,29 @@ export const chatRoutes: FastifyPluginAsync = async (app) => {
 
     const userA = request.user.sub < otherUserId ? request.user.sub : otherUserId;
     const userB = request.user.sub < otherUserId ? otherUserId : request.user.sub;
+    const [pendingMeetupRequest] = await app.db
+      .select({ id: meetupRequests.id })
+      .from(meetupRequests)
+      .where(
+        and(
+          eq(meetupRequests.eventDate, getMeetupTime().eventDate),
+          eq(meetupRequests.status, 'pending'),
+          or(
+            and(
+              eq(meetupRequests.fromUser, request.user.sub),
+              eq(meetupRequests.toUser, otherUserId),
+            ),
+            and(
+              eq(meetupRequests.fromUser, otherUserId),
+              eq(meetupRequests.toUser, request.user.sub),
+            ),
+          ),
+        ),
+      )
+      .limit(1);
+    if (pendingMeetupRequest !== undefined) {
+      return reply.code(409).send({ error: 'Wait for the meetup request to be accepted' });
+    }
     const [created] = await app.db
       .insert(conversations)
       .values({ userA, userB })
