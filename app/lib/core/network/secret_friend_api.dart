@@ -1,0 +1,138 @@
+import 'package:dio/dio.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+
+class SecretFriendApi {
+  SecretFriendApi({Dio? dio, FlutterSecureStorage? secureStorage})
+    : _dio =
+          dio ??
+          Dio(
+            BaseOptions(
+              baseUrl: const String.fromEnvironment(
+                'API_BASE_URL',
+                defaultValue: 'http://127.0.0.1:3001',
+              ),
+              connectTimeout: const Duration(seconds: 10),
+              receiveTimeout: const Duration(seconds: 15),
+            ),
+          ),
+      _secureStorage = secureStorage ?? const FlutterSecureStorage();
+
+  final Dio _dio;
+  final FlutterSecureStorage _secureStorage;
+  static const _accessTokenKey = 'secret_friend_access_token';
+  static const _refreshTokenKey = 'secret_friend_refresh_token';
+
+  String? _accessToken;
+  String? _refreshToken;
+
+  String get baseUrl => _dio.options.baseUrl;
+  String? get accessToken => _accessToken;
+  String? get refreshToken => _refreshToken;
+  bool get hasSession => _accessToken != null && _refreshToken != null;
+
+  Future<void> restoreTokens() async {
+    _accessToken = await _secureStorage.read(key: _accessTokenKey);
+    _refreshToken = await _secureStorage.read(key: _refreshTokenKey);
+  }
+
+  Future<void> saveTokens({
+    required String accessToken,
+    required String refreshToken,
+  }) async {
+    _accessToken = accessToken;
+    _refreshToken = refreshToken;
+    await Future.wait([
+      _secureStorage.write(key: _accessTokenKey, value: accessToken),
+      _secureStorage.write(key: _refreshTokenKey, value: refreshToken),
+    ]);
+  }
+
+  Future<void> clearTokens() async {
+    _accessToken = null;
+    _refreshToken = null;
+    await Future.wait([
+      _secureStorage.delete(key: _accessTokenKey),
+      _secureStorage.delete(key: _refreshTokenKey),
+    ]);
+  }
+
+  Future<Response<T>> request<T>(
+    String path, {
+    String method = 'GET',
+    Object? data,
+    Map<String, dynamic>? queryParameters,
+    Options? options,
+    bool authenticated = true,
+    bool retryUnauthorized = true,
+  }) async {
+    final mergedHeaders = <String, dynamic>{...?options?.headers};
+    if (authenticated && _accessToken != null) {
+      mergedHeaders['Authorization'] = 'Bearer $_accessToken';
+    }
+
+    try {
+      return await _dio.request<T>(
+        path,
+        data: data,
+        queryParameters: queryParameters,
+        options: (options ?? Options()).copyWith(
+          method: method,
+          headers: mergedHeaders,
+        ),
+      );
+    } on DioException catch (error) {
+      if (error.response?.statusCode != 401 ||
+          !authenticated ||
+          !retryUnauthorized ||
+          _refreshToken == null) {
+        rethrow;
+      }
+      await _refreshSession();
+      return request<T>(
+        path,
+        method: method,
+        data: data,
+        queryParameters: queryParameters,
+        options: options,
+        authenticated: authenticated,
+        retryUnauthorized: false,
+      );
+    }
+  }
+
+  Future<void> _refreshSession() async {
+    final token = _refreshToken;
+    if (token == null) throw StateError('No refresh token is available');
+
+    try {
+      final response = await _dio.post<Map<String, dynamic>>(
+        '/auth/refresh',
+        data: {'refreshToken': token},
+      );
+      final payload = response.data;
+      final accessToken = payload?['accessToken'];
+      final refreshToken = payload?['refreshToken'];
+      if (accessToken is! String || refreshToken is! String) {
+        throw const FormatException('Invalid refresh response');
+      }
+      await saveTokens(accessToken: accessToken, refreshToken: refreshToken);
+    } on DioException {
+      await clearTokens();
+      rethrow;
+    }
+  }
+
+  String errorMessage(Object error) {
+    if (error is DioException) {
+      final data = error.response?.data;
+      if (data is Map<String, dynamic> && data['error'] is String) {
+        return data['error']! as String;
+      }
+      if (error.response == null) {
+        return 'Cannot reach the server. Check your connection and API address.';
+      }
+      return 'Request failed (${error.response?.statusCode ?? 'unknown'})';
+    }
+    return 'Something went wrong. Please try again.';
+  }
+}

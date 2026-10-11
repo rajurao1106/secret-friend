@@ -1,0 +1,21 @@
+{
+  "dependencies": {
+    "cloudinary": "^2.11.0"
+  },
+  "name": "secret-friend",
+  "version": "1.0.0",
+  "description": "An anonymous friendship app monorepo with a Flutter client and a Fastify,\r TypeScript, PostgreSQL, and Drizzle backend.",
+  "main": "index.js",
+  "devDependencies": {
+    "concurrently": "^10.0.6"
+  },
+  "scripts": {
+    "dev:server": "npm --prefix server run dev",
+    "dev:app": "cd app && flutter run -d chrome --web-port 5000 --dart-define=API_BASE_URL=http://127.0.0.1:3001",
+    "dev": "concurrently -n server,app -c green,cyan \"npm:dev:server\" \"npm:dev:app\""
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs"
+}
