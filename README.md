@@ -59,7 +59,8 @@ Directory** to `server`. Vercel detects the Fastify entrypoint at
 - `JWT_SECRET` and `JWT_REFRESH_SECRET`: different private values, each at
   least 32 characters
 - `CORS_ORIGIN`: the exact origin of the Flutter Web app, if you deploy the web
-  client; native Android/iOS clients do not need a browser origin
+  client. For local Flutter Web on port 5000, use `http://localhost:5000`;
+  native Android/iOS clients do not need a browser origin
 - `OTP_PROVIDER=msg91`, `MSG91_AUTH_KEY`, and `MSG91_TEMPLATE_ID` when enabling
   real OTP delivery; `mock` is for development only
 
@@ -88,6 +89,9 @@ flutter build apk --release --dart-define=API_BASE_URL=https://your-backend.verc
 Push the backend deployment changes and redeploy. Keep the `Fastify` import and
 instance creation directly in `src/index.ts`; Vercel uses them to detect the
 Fastify entrypoint. The route and plugin setup lives in `src/create-app.ts`.
+`vercel.json` also rewrites `/api/...` requests to the backend's existing
+root-level routes, so both `/api/auth/send-otp` and `/auth/send-otp` are
+supported.
 Verify the deployment before building or installing the app by opening
 `https://your-backend.vercel.app/health`. A working backend returns HTTP 200
 with `{"status":"ok"}`. If it still returns HTTP 500, inspect that deployment's
