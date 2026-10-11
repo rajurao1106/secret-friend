@@ -112,3 +112,17 @@ For a physical phone, replace `10.0.2.2` with the computer's reachable LAN IP
 and ensure both devices can reach each other. Kundali score calculation still
 requires a chart provider on the backend; until then that optional feature is
 not available.
+
+### Build and download an Android APK with GitHub Actions
+
+Push the workflow to GitHub, then open the repository's **Actions** tab and
+select **Build Android APK**. Choose **Run workflow** and confirm. After the run
+succeeds, open it and download `secret-friend-android-apk` from **Artifacts**.
+The artifact contains `app-release.apk` and is available for 14 days. Pushes to
+`main` or `master` that change app files also start a build automatically.
+
+The APK uses the Vercel backend URL configured in
+`.github/workflows/build-android-apk.yml`. Update that workflow if the backend
+URL changes. Android release builds currently use the project's debug signing
+key, which is fine for testing and direct installation but must be replaced
+with a private release key before publishing through Google Play.
