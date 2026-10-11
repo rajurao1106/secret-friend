@@ -1,7 +1,9 @@
+import Fastify from 'fastify';
 import { buildApp } from './create-app.js';
 import { env } from './config/env.js';
 
-const app = buildApp(env);
+const app = Fastify({ logger: env.NODE_ENV !== 'test' });
+buildApp(env, app);
 
 try {
   await app.listen({ host: '0.0.0.0', port: env.PORT });

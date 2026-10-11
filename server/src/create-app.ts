@@ -24,8 +24,10 @@ import { KundaliMatchQueue } from './services/kundali-match-queue.js';
 import { UnconfiguredKundaliService } from './services/kundali.js';
 import { meetupRoutes } from './routes/meetup.js';
 
-export function buildApp(config: AppConfig) {
-  const app = Fastify({ logger: config.NODE_ENV !== 'test' });
+export function buildApp(
+  config: AppConfig,
+  app = Fastify({ logger: config.NODE_ENV !== 'test' }),
+) {
   const database = createDatabase(config.DATABASE_URL);
   const otpProvider =
     config.OTP_PROVIDER === 'msg91'
