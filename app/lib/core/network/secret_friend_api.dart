@@ -1,16 +1,15 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
+import 'api_base_url.dart';
+
 class SecretFriendApi {
   SecretFriendApi({Dio? dio, FlutterSecureStorage? secureStorage})
     : _dio =
           dio ??
           Dio(
             BaseOptions(
-              baseUrl: const String.fromEnvironment(
-                'API_BASE_URL',
-                defaultValue: 'http://127.0.0.1:3001',
-              ),
+              baseUrl: apiBaseUrl,
               connectTimeout: const Duration(seconds: 10),
               receiveTimeout: const Duration(seconds: 15),
             ),

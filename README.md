@@ -78,7 +78,10 @@ npm run db:migrate
 ```
 
 After deploying, use the Vercel deployment URL as the Flutter API base URL. The
-URL is compiled into the app, so rebuild it when the backend URL changes:
+URL is compiled into the app. Release builds default to the repository's
+Vercel backend URL; debug builds default to localhost. Pass
+`--dart-define=API_BASE_URL=...` to use a different backend, then rebuild the
+app when the backend URL changes:
 
 ```powershell
 Set-Location app
