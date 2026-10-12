@@ -6,7 +6,7 @@ import type { AppConfig } from '../config/env.js';
 const testConfig: AppConfig = {
   NODE_ENV: 'test',
   PORT: 3000,
-  CORS_ORIGIN: 'http://localhost:56767',
+  CORS_ORIGIN: 'http://localhost:5000',
   DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/secret_friend',
   JWT_SECRET: 'test_only_secret_that_is_at_least_32_characters',
   JWT_REFRESH_SECRET: 'test_only_refresh_secret_over_32_characters',
@@ -33,12 +33,12 @@ test('allows Flutter Web localhost origins on a dynamic development port', async
       method: 'OPTIONS',
       url: '/auth/send-otp',
       headers: {
-        origin: 'http://localhost:56767',
+        origin: 'http://localhost:5000http://localhost:5000',
         'access-control-request-method': 'POST',
         'access-control-request-headers': 'content-type',
       },
     });
-    assert.equal(response.headers['access-control-allow-origin'], 'http://localhost:56767');
+    assert.equal(response.headers['access-control-allow-origin'], 'http://localhost:5000');
     assert.equal(
       response.headers['access-control-expose-headers'],
       'x-vercel-id, x-request-id',

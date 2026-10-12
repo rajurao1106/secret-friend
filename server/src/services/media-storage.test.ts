@@ -5,7 +5,7 @@ import { CloudinaryMediaStorage } from './media-storage.js';
 const storage = new CloudinaryMediaStorage({
   NODE_ENV: 'test',
   PORT: 3000,
-  CORS_ORIGIN: 'http://localhost:56767',
+  CORS_ORIGIN: 'http://localhost:5000',
   DATABASE_URL: 'postgres://localhost:5432/secret_friend',
   JWT_SECRET: 'test_only_secret_that_is_at_least_32_characters',
   JWT_REFRESH_SECRET: 'test_only_refresh_secret_over_32_characters',

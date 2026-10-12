@@ -13,7 +13,7 @@ const optionalString = z.preprocess(
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
-  CORS_ORIGIN: z.url().default('http://localhost:56767'),
+  CORS_ORIGIN: z.url().default('http://localhost:5000'),
   DATABASE_URL: z.url(),
   JWT_SECRET: z.string().min(32),
   JWT_REFRESH_SECRET: z.string().min(32),
