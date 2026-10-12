@@ -60,7 +60,10 @@ export const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (
       return reply.code(429).send({ error: 'Too many OTP requests' });
     }
 
-    const code = generateOtp();
+    // TESTING ONLY: with OTP_PROVIDER=mock every login code is 000000.
+    // Switch OTP_PROVIDER to msg91 before real users sign in.
+    const code =
+      options.config.OTP_PROVIDER === 'mock' ? '000000' : generateOtp();
     await app.db.delete(otpCodes).where(eq(otpCodes.mobile, mobile));
     const [challenge] = await app.db
       .insert(otpCodes)
