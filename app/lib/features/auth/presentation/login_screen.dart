@@ -276,9 +276,26 @@ class _ErrorMessage extends StatelessWidget {
         color: const Color(0xFFFFECE9),
         borderRadius: BorderRadius.circular(12),
       ),
-      child: Text(
-        message,
-        style: const TextStyle(color: Color(0xFF9C352B), fontSize: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.error_outline_rounded,
+            color: Color(0xFF9C352B),
+            size: 18,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: SelectableText(
+              message,
+              style: const TextStyle(
+                color: Color(0xFF9C352B),
+                fontSize: 13,
+                height: 1.4,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

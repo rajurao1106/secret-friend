@@ -96,8 +96,10 @@ Verify the deployment before building or installing the app by opening
 `https://your-backend.vercel.app/health`. A working backend returns HTTP 200
 with `{"status":"ok"}`. If it still returns HTTP 500, inspect that deployment's
 **Runtime Logs** and confirm the required environment variables are set for its
-environment. Building an APK in GitHub Actions only compiles the Flutter
-client; it does not deploy or verify the backend.
+environment. The sign-in screen shows the HTTP status and, when available, the
+request ID so you can find the matching runtime log. Building an APK in GitHub
+Actions only compiles the Flutter client; it does not deploy or verify the
+backend.
 
 Chat messages use authenticated HTTP requests and refresh every four seconds
 while a conversation is open, so the app does not depend on an in-memory

@@ -124,15 +124,61 @@ class SecretFriendApi {
 
   String errorMessage(Object error) {
     if (error is DioException) {
-      final data = error.response?.data;
-      if (data is Map<String, dynamic> && data['error'] is String) {
-        return data['error']! as String;
+      final response = error.response;
+      if (response == null) {
+        return switch (error.type) {
+          DioExceptionType.connectionTimeout =>
+            'Could not connect to the backend at ${_dio.options.baseUrl}.\n'
+                'Open ${_dio.options.baseUrl}/health to check whether it is online.',
+          DioExceptionType.receiveTimeout =>
+            'The server took too long to respond. Please try again.',
+          DioExceptionType.connectionError => 'Cannot connect to the server. Check your internet connection and try again.',
+          _ => 'No response from the server. Please check your connection and try again.',
+        };
       }
-      if (error.response == null) {
-        return 'Cannot reach the server. Check your connection and API address.';
+
+      final statusCode = response.statusCode;
+      if (statusCode != null && statusCode >= 500) {
+        final platformCode = _vercelErrorCode(response.data);
+        final requestId =
+            response.headers.value('x-vercel-id') ??
+            response.headers.value('x-request-id');
+        return [
+          'Server error ($statusCode).',
+          if (platformCode == 'INTERNAL_FUNCTION_INVOCATION_FAILED' ||
+              platformCode == 'FUNCTION_INVOCATION_FAILED')
+            'The backend function failed to start or crashed. Check the Vercel deployment Runtime Logs.'
+          else if (platformCode == 'FUNCTION_INVOCATION_TIMEOUT')
+            'The backend took too long to respond. Check the Vercel deployment Runtime Logs.'
+          else
+            'The backend could not complete this request. Please try again later.',
+          if (platformCode != null) 'Error code: $platformCode.',
+          if (requestId != null) 'Request ID: $requestId',
+        ].join('\n');
       }
-      return 'Request failed (${error.response?.statusCode ?? 'unknown'})';
+
+      final data = response.data;
+      if (data is Map) {
+        final message = data['error'] ?? data['message'];
+        if (message is String && message.isNotEmpty) return message;
+      }
+      return 'Request failed (HTTP ${statusCode ?? 'unknown'}). Please try again.';
     }
     return 'Something went wrong. Please try again.';
+  }
+
+  String? _vercelErrorCode(Object? data) {
+    const codes = [
+      'INTERNAL_FUNCTION_INVOCATION_FAILED',
+      'FUNCTION_INVOCATION_FAILED',
+      'FUNCTION_INVOCATION_TIMEOUT',
+    ];
+    final content = data is Map
+        ? data.values.join(' ')
+        : data?.toString() ?? '';
+    for (final code in codes) {
+      if (content.contains(code)) return code;
+    }
+    return null;
   }
 }
