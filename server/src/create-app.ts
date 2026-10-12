@@ -31,7 +31,7 @@ export function buildApp(
   const database = createDatabase(config.DATABASE_URL);
   const otpProvider =
     config.OTP_PROVIDER === 'msg91'
-      ? new Msg91OtpProvider()
+      ? new Msg91OtpProvider(config)
       : new MockOtpProvider();
 
   app.decorate('db', database.db);

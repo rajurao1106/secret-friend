@@ -64,6 +64,12 @@ Directory** to `server`. Vercel detects the Fastify entrypoint at
 - `OTP_PROVIDER=msg91`, `MSG91_AUTH_KEY`, and `MSG91_TEMPLATE_ID` when enabling
   real OTP delivery; `mock` is for development only
 
+The MSG91 provider sends the app-generated code through MSG91's Flow API. The
+approved Flow template must include the OTP as its first variable (`VAR1`), and
+MSG91 must have the matching DLT-approved template configured. Keep the Authkey
+private. Set all three MSG91 variables in Vercel's Production environment and
+redeploy; setting them in `server\.env` only affects local development.
+
 Set the required variables for the **Production** environment, then redeploy.
 `DATABASE_URL`, `JWT_SECRET`, and `JWT_REFRESH_SECRET` are mandatory; the two
 JWT secrets must be different and at least 32 characters each. Do not use the
