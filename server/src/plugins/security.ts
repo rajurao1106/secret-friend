@@ -13,6 +13,7 @@ async function securityPlugin(
   await app.register(cors, {
     origin: getCorsOrigins(config),
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'],
+    exposedHeaders: ['x-vercel-id', 'x-request-id'],
   });
   await app.register(helmet);
   await app.register(rateLimit, {

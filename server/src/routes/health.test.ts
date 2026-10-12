@@ -39,6 +39,10 @@ test('allows Flutter Web localhost origins on a dynamic development port', async
       },
     });
     assert.equal(response.headers['access-control-allow-origin'], 'http://localhost:56767');
+    assert.equal(
+      response.headers['access-control-expose-headers'],
+      'x-vercel-id, x-request-id',
+    );
   } finally {
     await app.close();
   }
