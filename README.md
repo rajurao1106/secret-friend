@@ -26,8 +26,9 @@ For Neon, copy the PostgreSQL connection string from the Neon dashboard into
 `DATABASE_URL` in `server\.env`, including its `sslmode=require` parameter.
 Keep this connection string private. Set `JWT_SECRET` and
 `JWT_REFRESH_SECRET` to private values of at least 32 characters before
-starting the service. `OTP_PROVIDER=mock` writes test OTPs to the server
-console. Add `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and
+starting the service. Phone sign-in uses Firebase Phone Authentication; it
+requires Firebase client configuration in Flutter and Firebase Admin
+credentials on the backend. Add `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and
 `CLOUDINARY_API_SECRET` to enable private Cloudinary media uploads; media
 storage is unavailable until all three values are configured. For local
 development, the included `server\docker-compose.yml` can start PostgreSQL
@@ -43,12 +44,24 @@ only issued after a reveal.
 
 The health check is available at `http://127.0.0.1:3001/health` with the
 workspace's configured backend port. Authentication
-routes are `POST /auth/send-otp`, `POST /auth/verify-otp`, `POST /auth/refresh`,
+routes are `POST /auth/firebase-session`, `POST /auth/refresh`,
 and `POST /auth/logout`. Authenticated account deletion uses `DELETE /me`.
 Run `npm test`, `npm run typecheck`, and `npm run build` from `server` to
 validate the backend.
 
 ### Deploy the backend to Vercel
+
+Create a Firebase project, enable **Authentication → Phone**, and register the
+Android, iOS, and Web apps you plan to use. Phone authentication has quotas,
+country restrictions, and may have billing requirements; check the current
+Firebase pricing and limits for your project.
+
+Copy `app\firebase_config.example.json` to `app\firebase_config.json` and fill
+in the Firebase client values from **Project settings → Your apps**. This is
+client configuration, not a private service-account key. For Web, add
+`localhost` and your deployed web domain to Firebase Authentication's
+authorized domains. For Android, add the app's SHA-1 and SHA-256 fingerprints
+in Firebase project settings so app verification works.
 
 Import the GitHub repository into Vercel and set the project's **Root
 Directory** to `server`. Vercel detects the Fastify entrypoint at
@@ -61,14 +74,15 @@ Directory** to `server`. Vercel detects the Fastify entrypoint at
 - `CORS_ORIGIN`: the exact origin of the Flutter Web app, if you deploy the web
   client. For local Flutter Web on port 5000, use `http://localhost:5000`;
   native Android/iOS clients do not need a browser origin
-- `OTP_PROVIDER=msg91`, `MSG91_AUTH_KEY`, and `MSG91_TEMPLATE_ID` when enabling
-  real OTP delivery; `mock` is for development only
+- `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, and `FIREBASE_PRIVATE_KEY`:
+  Firebase Admin service-account credentials used only by the backend to
+  verify Firebase ID tokens. Keep the private key secret. Set them for
+  Production and redeploy.
 
-The MSG91 provider sends the app-generated code through MSG91's Flow API. The
-approved Flow template must include the OTP as its first variable (`VAR1`), and
-MSG91 must have the matching DLT-approved template configured. Keep the Authkey
-private. Set all three MSG91 variables in Vercel's Production environment and
-redeploy; setting them in `server\.env` only affects local development.
+The backend no longer sends or verifies OTP codes itself. Flutter completes
+phone verification with Firebase and sends the resulting ID token to
+`POST /auth/firebase-session`; the backend verifies the token before creating
+the app's access and refresh-token session.
 
 Set the required variables for the **Production** environment, then redeploy.
 `DATABASE_URL`, `JWT_SECRET`, and `JWT_REFRESH_SECRET` are mandatory; the two
@@ -91,15 +105,21 @@ app when the backend URL changes:
 
 ```powershell
 Set-Location app
-flutter run --dart-define=API_BASE_URL=https://your-backend.vercel.app
-flutter build apk --release --dart-define=API_BASE_URL=https://your-backend.vercel.app
+flutter run --dart-define-from-file=firebase_config.json --dart-define=API_BASE_URL=https://your-backend.vercel.app
+flutter build apk --release --dart-define-from-file=firebase_config.json --dart-define=API_BASE_URL=https://your-backend.vercel.app
 ```
+
+The local Firebase config file is git-ignored. For GitHub Actions APK builds,
+add the Android Firebase client values as repository Actions variables named
+`FIREBASE_API_KEY`, `FIREBASE_MESSAGING_SENDER_ID`, `FIREBASE_PROJECT_ID`, and
+`FIREBASE_ANDROID_APP_ID`.
 
 Push the backend deployment changes and redeploy. Keep the `Fastify` import and
 instance creation directly in `src/index.ts`; Vercel uses them to detect the
 Fastify entrypoint. The route and plugin setup lives in `src/create-app.ts`.
 `vercel.json` also rewrites `/api/...` requests to the backend's existing
-root-level routes, so both `/api/auth/send-otp` and `/auth/send-otp` are
+root-level routes, so both `/api/auth/firebase-session` and
+`/auth/firebase-session` are
 supported.
 Verify the deployment before building or installing the app by opening
 `https://your-backend.vercel.app/health`. A working backend returns HTTP 200
@@ -116,7 +136,7 @@ WebSocket connection across Vercel function instances.
 
 ## Flutter client
 
-The Flutter client uses the backend OTP flow, profile onboarding, discovery,
+The Flutter client uses Firebase Phone Authentication, profile onboarding, discovery,
 chat/reveal requests, safety endpoints, account settings, and authenticated
 media endpoints.
 
@@ -163,3 +183,27 @@ The APK uses the Vercel backend URL configured in
 URL changes. Android release builds currently use the project's debug signing
 key, which is fine for testing and direct installation but must be replaced
 with a private release key before publishing through Google Play.
+
+
+
+id("com.google.gms.google-services") version "4.5.0" apply false
+
+
+plugins {
+  id("com.android.application")
+
+  // Add the Google services Gradle plugin
+  id("com.google.gms.google-services")
+
+  ...
+  }
+
+dependencies {
+  // Import the Firebase BoM
+  implementation(platform("com.google.firebase:firebase-bom:35.0.0"))
+
+
+  // TODO: Add the dependencies for Firebase products you want to use
+  // When using the BoM, don't specify versions in Firebase dependencies
+  // https://firebase.google.com/docs/android/setup#available-libraries
+}

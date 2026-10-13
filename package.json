@@ -11,9 +11,9 @@
   },
 "scripts": {
   "dev:server": "npm --prefix server run dev",
-  "dev:app": "cd app && flutter run -d chrome --web-port 5000 --dart-define=API_BASE_URL=https://secret-friend-rosy.vercel.app",
+  "dev:app": "cd app && flutter run -d chrome --web-port 5000 --dart-define-from-file=firebase_config.json --dart-define=API_BASE_URL=https://secret-friend-rosy.vercel.app",
   "dev": "concurrently -n server,app -c green,cyan \"npm:dev:server\" \"npm:dev:app\"",
-  "apk": "cd app && flutter build apk --release --dart-define=API_BASE_URL=https://secret-friend-rosy.vercel.app"
+  "apk": "cd app && flutter build apk --release --dart-define-from-file=firebase_config.json --dart-define=API_BASE_URL=https://secret-friend-rosy.vercel.app"
 },
   "keywords": [],
   "author": "",

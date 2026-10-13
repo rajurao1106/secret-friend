@@ -9,7 +9,6 @@ const storage = new CloudinaryMediaStorage({
   DATABASE_URL: 'postgres://localhost:5432/secret_friend',
   JWT_SECRET: 'test_only_secret_that_is_at_least_32_characters',
   JWT_REFRESH_SECRET: 'test_only_refresh_secret_over_32_characters',
-  OTP_PROVIDER: 'mock',
   CLOUDINARY_CLOUD_NAME: 'test-cloud',
   CLOUDINARY_API_KEY: 'test-key',
   CLOUDINARY_API_SECRET: 'test-secret',

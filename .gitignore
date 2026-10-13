@@ -5,6 +5,7 @@ node_modules/
 server/dist/
 server/coverage/
 app/.dart_tool/
+app/firebase_config.json
 app/.packages
 app/build/
 app/coverage/

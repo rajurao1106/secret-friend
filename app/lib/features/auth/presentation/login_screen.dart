@@ -49,12 +49,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   Future<void> _verifyCode() async {
     final mobile = _normalizedMobile();
     final code = _codeController.text.trim();
-    if (code.length != 6) {
+    final sessionController = ref.read(sessionControllerProvider);
+    if (code.length != 6 && !sessionController.canAutoVerify) {
       setState(() => _error = 'Enter the six-digit OTP.');
       return;
     }
     await _run(
-      () => ref.read(sessionControllerProvider).verifyOtp(mobile, code),
+      () => sessionController.verifyOtp(mobile, code),
     );
   }
 
@@ -155,7 +156,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                     ),
                     const SizedBox(height: 7),
                     const Text(
-                      'Development mode: check the server terminal for the OTP.',
+                      'Enter the verification code sent to your phone.',
                       style: TextStyle(color: Color(0xFF7D8981), fontSize: 12),
                     ),
                   ],

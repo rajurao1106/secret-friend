@@ -7,9 +7,9 @@ void main() {
 
   test('explains Vercel function failures and includes the request ID', () {
     final error = DioException(
-      requestOptions: RequestOptions(path: '/auth/send-otp'),
+      requestOptions: RequestOptions(path: '/auth/firebase-session'),
       response: Response<dynamic>(
-        requestOptions: RequestOptions(path: '/auth/send-otp'),
+        requestOptions: RequestOptions(path: '/auth/firebase-session'),
         statusCode: 500,
         data: {'error': 'INTERNAL_FUNCTION_INVOCATION_FAILED'},
         headers: Headers.fromMap({
@@ -29,9 +29,9 @@ void main() {
 
   test('keeps actionable API validation errors', () {
     final error = DioException(
-      requestOptions: RequestOptions(path: '/auth/send-otp'),
+      requestOptions: RequestOptions(path: '/auth/firebase-session'),
       response: Response<dynamic>(
-        requestOptions: RequestOptions(path: '/auth/send-otp'),
+        requestOptions: RequestOptions(path: '/auth/firebase-session'),
         statusCode: 400,
         data: {'error': 'Invalid Indian mobile number'},
       ),
@@ -42,7 +42,7 @@ void main() {
 
   test('distinguishes a server connection timeout', () {
     final error = DioException(
-      requestOptions: RequestOptions(path: '/auth/send-otp'),
+      requestOptions: RequestOptions(path: '/auth/firebase-session'),
       type: DioExceptionType.connectionTimeout,
     );
 

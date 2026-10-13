@@ -1,4 +1,4 @@
-package com.secretfriend.secret_friend
+package secret.friend
 
 import io.flutter.embedding.android.FlutterActivity
 

@@ -10,7 +10,6 @@ const testConfig: AppConfig = {
   DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/secret_friend',
   JWT_SECRET: 'test_only_secret_that_is_at_least_32_characters',
   JWT_REFRESH_SECRET: 'test_only_refresh_secret_over_32_characters',
-  OTP_PROVIDER: 'mock',
 };
 
 test('GET /health returns the service status', async () => {
@@ -31,7 +30,7 @@ test('allows Flutter Web localhost origins on a dynamic development port', async
   try {
     const response = await app.inject({
       method: 'OPTIONS',
-      url: '/auth/send-otp',
+      url: '/auth/firebase-session',
       headers: {
         origin: 'http://localhost:5000http://localhost:5000',
         'access-control-request-method': 'POST',
@@ -79,17 +78,33 @@ test('closes the realtime and HTTP servers cleanly', async () => {
   await app.close();
 });
 
-test('rejects invalid mobile numbers before sending an OTP', async () => {
+test('rejects a malformed Firebase session request', async () => {
   const app = buildApp(testConfig);
 
   try {
     const response = await app.inject({
       method: 'POST',
-      url: '/auth/send-otp',
-      payload: { mobile: '12345' },
+      url: '/auth/firebase-session',
+      payload: {},
     });
     assert.equal(response.statusCode, 400);
-    assert.deepEqual(response.json(), { error: 'Invalid Indian mobile number' });
+    assert.deepEqual(response.json(), { error: 'Invalid Firebase sign-in token' });
+  } finally {
+    await app.close();
+  }
+});
+
+test('reports missing Firebase Admin credentials when exchanging a token', async () => {
+  const app = buildApp(testConfig);
+
+  try {
+    const response = await app.inject({
+      method: 'POST',
+      url: '/auth/firebase-session',
+      payload: { idToken: 'firebase-id-token' },
+    });
+    assert.equal(response.statusCode, 503);
+    assert.deepEqual(response.json(), { error: 'Phone sign-in is not configured' });
   } finally {
     await app.close();
   }

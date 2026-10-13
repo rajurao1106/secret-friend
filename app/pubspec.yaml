@@ -41,6 +41,8 @@ dependencies:
   flutter_secure_storage: ^11.2.0
   file_picker: ^13.1.0
   url_launcher: ^6.3.3
+  firebase_core: ^4.15.0
+  firebase_auth: ^6.7.0
 
 dev_dependencies:
   flutter_test:

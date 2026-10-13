@@ -9,12 +9,12 @@ import { authRoutes } from './routes/auth.js';
 import { chatRoutes } from './routes/chat.js';
 import { discoverRoutes } from './routes/discover.js';
 import { healthRoutes } from './routes/health.js';
+import { FirebaseAdminTokenVerifier } from './services/firebase-auth.js';
 import { meRoutes } from './routes/me.js';
 import { profileRoutes } from './routes/profile.js';
 import { revealRoutes } from './routes/reveals.js';
 import { safetyRoutes } from './routes/safety.js';
 import { NominatimGeocodingService } from './services/geocoding.js';
-import { MockOtpProvider, Msg91OtpProvider } from './services/otp-provider.js';
 import { OtpRateLimiter } from './services/otp-rate-limiter.js';
 import { NoopNotificationService } from './services/notification-service.js';
 import { createMediaStorage } from './services/media-storage.js';
@@ -29,11 +29,6 @@ export function buildApp(
   app = Fastify({ logger: config.NODE_ENV !== 'test' }),
 ) {
   const database = createDatabase(config.DATABASE_URL);
-  const otpProvider =
-    config.OTP_PROVIDER === 'msg91'
-      ? new Msg91OtpProvider(config)
-      : new MockOtpProvider();
-
   app.decorate('db', database.db);
   app.decorate('notificationService', new NoopNotificationService());
   const mediaStorage = createMediaStorage(config);
@@ -46,7 +41,7 @@ export function buildApp(
   app.register(healthRoutes);
   app.register(authRoutes, {
     config,
-    otpProvider,
+    firebaseTokenVerifier: new FirebaseAdminTokenVerifier(config),
     rateLimiter: new OtpRateLimiter(3, 10 * 60 * 1000),
   });
   app.register(meRoutes);

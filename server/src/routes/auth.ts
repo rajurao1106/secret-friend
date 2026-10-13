@@ -1,21 +1,18 @@
 import { randomInt } from 'node:crypto';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import type { AppConfig } from '../config/env.js';
 import {
-  otpCodes,
   refreshTokens,
   users,
 } from '../schema/index.js';
 import { OtpRateLimiter } from '../services/otp-rate-limiter.js';
 import {
-  generateOtp,
-  hashOtp,
-  OTP_TTL_MS,
-  verifyOtpChallenge,
-} from '../services/otp.js';
-import type { OtpProvider } from '../services/otp-provider.js';
+  FirebaseAdminConfigurationError,
+  FirebaseTokenInvalidError,
+  type FirebaseTokenVerifier,
+} from '../services/firebase-auth.js';
 import {
   createRefreshToken,
   hashRefreshToken,
@@ -26,17 +23,15 @@ const mobileSchema = z.string().trim().regex(mobilePattern).transform((value) =>
   const digits = value.replace(/^\+?91/, '');
   return digits;
 });
-const sendOtpSchema = z.object({ mobile: mobileSchema });
-const verifyOtpSchema = z.object({
-  mobile: mobileSchema,
-  code: z.string().regex(/^\d{6}$/),
+const firebaseSessionSchema = z.object({
+  idToken: z.string().min(1).max(8192),
 });
 const refreshSchema = z.object({ refreshToken: z.string().min(32).max(256) });
 const refreshTtlMs = 30 * 24 * 60 * 60 * 1000;
 
 export interface AuthRouteOptions {
   readonly config: AppConfig;
-  readonly otpProvider: OtpProvider;
+  readonly firebaseTokenVerifier: FirebaseTokenVerifier;
   readonly rateLimiter: OtpRateLimiter;
 }
 
@@ -44,100 +39,55 @@ export const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (
   app,
   options,
 ) => {
-  app.post('/auth/send-otp', async (request, reply) => {
-    const parsed = sendOtpSchema.safeParse(request.body);
+  app.post('/auth/firebase-session', async (request, reply) => {
+    const parsed = firebaseSessionSchema.safeParse(request.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: 'Invalid Indian mobile number' });
+      return reply.code(400).send({ error: 'Invalid Firebase sign-in token' });
     }
 
-    const { mobile } = parsed.data;
-    if (
-      !options.rateLimiter.consume([
-        `otp:mobile:${mobile}`,
-        `otp:ip:${request.ip}`,
-      ])
-    ) {
-      return reply.code(429).send({ error: 'Too many OTP requests' });
-    }
-
-    // TESTING ONLY: with OTP_PROVIDER=mock every login code is 000000.
-    // Switch OTP_PROVIDER to msg91 before real users sign in.
-    const code =
-      options.config.OTP_PROVIDER === 'mock' ? '000000' : generateOtp();
-    await app.db.delete(otpCodes).where(eq(otpCodes.mobile, mobile));
-    const [challenge] = await app.db
-      .insert(otpCodes)
-      .values({
-        mobile,
-        codeHash: hashOtp(mobile, code, options.config.JWT_SECRET),
-        expiresAt: new Date(Date.now() + OTP_TTL_MS),
-        attempts: 0,
-      })
-      .returning({ id: otpCodes.id });
-
-    if (challenge === undefined) {
-      throw new Error('Failed to create OTP challenge');
-    }
-
+    let identity;
     try {
-      await options.otpProvider.sendOtp(mobile, code);
+      identity = await options.firebaseTokenVerifier.verifyIdToken(
+        parsed.data.idToken,
+      );
     } catch (error: unknown) {
-      await app.db.delete(otpCodes).where(eq(otpCodes.id, challenge.id));
+      if (error instanceof FirebaseAdminConfigurationError) {
+        request.log.error({ err: error }, 'Firebase Admin is not configured');
+        return reply.code(503).send({ error: 'Phone sign-in is not configured' });
+      }
+      if (error instanceof FirebaseTokenInvalidError) {
+        return reply.code(401).send({ error: 'Invalid or expired Firebase token' });
+      }
       throw error;
     }
 
-    return reply.code(202).send({ message: 'OTP sent' });
-  });
-
-  app.post('/auth/verify-otp', async (request, reply) => {
-    const parsed = verifyOtpSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: 'Invalid verification request' });
+    if (identity.phoneNumber === undefined) {
+      return reply.code(401).send({ error: 'Firebase account has no valid phone number' });
     }
 
-    const { mobile, code } = parsed.data;
+    const parsedMobile = mobileSchema.safeParse(identity.phoneNumber);
+    if (!parsedMobile.success) {
+      return reply.code(401).send({ error: 'Firebase account has no valid phone number' });
+    }
+    const mobile = parsedMobile.data;
+
+    if (
+      !options.rateLimiter.consume([
+        `firebase:mobile:${mobile}`,
+        `firebase:ip:${request.ip}`,
+      ])
+    ) {
+      return reply.code(429).send({ error: 'Too many sign-in attempts' });
+    }
+
     const now = new Date();
     const session = await app.db.transaction(async (tx) => {
-      const [challenge] = await tx
-        .select()
-        .from(otpCodes)
-        .where(eq(otpCodes.mobile, mobile))
-        .orderBy(desc(otpCodes.createdAt))
-        .limit(1)
-        .for('update');
-
-      if (challenge === undefined) {
-        return { status: 'invalid' as const };
-      }
-
-      const verification = verifyOtpChallenge(
-        challenge,
-        mobile,
-        code,
-        options.config.JWT_SECRET,
-        now,
-      );
-
-      if (verification.status !== 'valid') {
-        if (
-          verification.status === 'invalid' ||
-          verification.status === 'attempt_limit'
-        ) {
-          await tx
-            .update(otpCodes)
-            .set({ attempts: verification.attempts })
-            .where(eq(otpCodes.id, challenge.id));
-        }
-        return { status: verification.status };
-      }
-
-      await tx.delete(otpCodes).where(eq(otpCodes.mobile, mobile));
-
       const [existingUser] = await tx
         .select()
         .from(users)
         .where(eq(users.mobile, mobile))
-        .limit(1);
+        .limit(1)
+        .for('update');
 
       if (existingUser !== undefined && existingUser.deletedAt !== null) {
         return { status: 'deleted' as const };
@@ -181,12 +131,7 @@ export const authRoutes: FastifyPluginAsync<AuthRouteOptions> = async (
     });
 
     if (session.status !== 'valid') {
-      return reply.code(session.status === 'attempt_limit' ? 429 : 401).send({
-        error:
-          session.status === 'attempt_limit'
-            ? 'OTP attempt limit reached'
-            : 'Invalid or expired OTP',
-      });
+      return reply.code(401).send({ error: 'This account is unavailable' });
     }
 
     const accessToken = app.jwt.sign(

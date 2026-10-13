@@ -1,0 +1,47 @@
+{
+  "project_info": {
+    "project_number": "540458189659",
+    "project_id": "portfolai-btt0l",
+    "storage_bucket": "portfolai-btt0l.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:540458189659:android:7e4dd7c4f50ef9f9a0907e",
+        "android_client_info": {
+          "package_name": "secret.friend"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "540458189659-3kvdnralesthoassvbd7lkj9naptmalq.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "secret.friend",
+            "certificate_hash": "d6a59a35eeb9854990dcf060bc11b0807ae9289a"
+          }
+        },
+        {
+          "client_id": "540458189659-gfisv1tbdi81do7p8vhum5lq1ldeudoc.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAGzwQR_-vOmtRZhgTz_PD6c8x8euXTJM8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "540458189659-gfisv1tbdi81do7p8vhum5lq1ldeudoc.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
