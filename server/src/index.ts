@@ -1,28 +1,14 @@
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import Fastify from 'fastify';
+import { buildApp } from './create-app.js';
+import { env } from './config/env.js';
 
-let appPromise: Promise<any> | undefined;
+const app = Fastify({ logger: env.NODE_ENV !== 'test' });
+buildApp(env, app);
 
-async function getApp() {
-  const [{ default: Fastify }, { buildApp }, { env }] = await Promise.all([
-    import('fastify'),
-    import('../src/create-app.js'),
-    import('../src/config/env.js'),
-  ]);
-  const app = buildApp(env, Fastify({ logger: false }));
-  await app.ready();
-  return app;
-}
-
-export default async function handler(req: IncomingMessage, res: ServerResponse) {
-  try {
-    appPromise ??= getApp();
-    const app = await appPromise;
-    app.server.emit('request', req, res);
-  } catch (error) {
-    appPromise = undefined;
-    console.error('Startup failed:', error);
-    res.statusCode = 500;
-    res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify({ error: 'Server failed to start. Check Vercel runtime logs.' }));
-  }
+try {
+  await app.listen({ host: '0.0.0.0', port: env.PORT });
+} catch (error: unknown) {
+  app.log.error({ err: error }, 'Failed to start server');
+  await app.close();
+  process.exitCode = 1;
 }
